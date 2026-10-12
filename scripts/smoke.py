@@ -9,6 +9,10 @@ checks: the scene spawns, observation/action sizes, nothing explodes under zero 
 with ``--teleport`` whether a leg written straight into its assembled pose (a) stays there
 under the SDF contact (no interpenetration push-out) and (b) registers as assembled -- the
 test of the asset frames and the assembled-pose numbers.
+
+The experiments step physics directly (``physics_steps``), not ``env.step``: the env ends an
+episode on success, so stepping it would reset the leg back onto the table the moment the
+check fires and make a correct seat look like an ejection.
 """
 
 import argparse
@@ -55,9 +59,26 @@ from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry  # noqa: E402
 
 import furniture_lab.tasks  # noqa: E402, F401
 from furniture_lab.tasks.assembly.mdp.state import parts_pose_w, tracker  # noqa: E402
-from furniture_lab.tasks.furniture.assembly import relative_pose, rotation_diag  # noqa: E402
+from furniture_lab.tasks.furniture.assembly import pairs_assembled, relative_pose, rotation_diag  # noqa: E402
 from furniture_lab.tasks.furniture import catalog  # noqa: E402
 from furniture_lab.tasks.furniture.square_table import rel_pose_targets  # noqa: E402
+
+
+def physics_steps(env, n: int) -> None:
+    """Advance physics n env-steps WITHOUT env.step(): no terminations, so a leg that counts
+    as assembled is not reset out from under the experiment (which is what env.step does --
+    success ends the episode, as upstream's done flag does)."""
+    render = not args.headless
+    for _ in range(n * env.cfg.decimation):
+        env.sim.step(render=render)
+        env.scene.update(env.physics_dt)
+
+
+def assembled_now(env) -> torch.Tensor:
+    """The raw assembled check on the current poses, not the per-episode latch."""
+    t = tracker(env)
+    pos, quat = parts_pose_w(env)
+    return pairs_assembled(pos, quat, t.pairs, t.targets, t.pos_threshold, t.ori_bound)[:, 0]
 
 
 def _watch(env, leg, top, seated_pos, steps: int, zero: torch.Tensor, label: str) -> None:
@@ -67,14 +88,15 @@ def _watch(env, leg, top, seated_pos, steps: int, zero: torch.Tensor, label: str
     for _ in range(120):
         env.sim.render()  # ~2 s at 60 fps, physics frozen: this is the pose as placed
     for i in range(steps):
-        env.step(zero)
+        physics_steps(env, 1)
         rel_pos, rel_quat = relative_pose(
             top.data.root_pos_w, top.data.root_quat_w, leg.data.root_pos_w, leg.data.root_quat_w
         )
         print(
             f"[smoke] {label} step {i:3d}: rel z {rel_pos[:, 2].mean().item() * 1000:7.2f} mm  "
             f"upright cos {rotation_diag(rel_quat)[:, 2].mean().item():.3f}  "
-            f"|v| {leg.data.root_lin_vel_w.norm(dim=-1).mean().item():.3f} m/s"
+            f"|v| {leg.data.root_lin_vel_w.norm(dim=-1).mean().item():.3f} m/s  "
+            f"assembled {assembled_now(env).tolist()}"
         )
 
 
@@ -121,7 +143,7 @@ def main() -> None:
             leg.write_root_velocity_to_sim(zero_vel)
             print(f"[smoke] drop: leg released {args.drop * 1000:.0f} mm above the seat, upright, twist 0")
             for i in range(args.settle):
-                env.step(zero)
+                physics_steps(env, 1)
                 if i % 10 == 0 or i == args.settle - 1:
                     rel_pos, rel_quat = relative_pose(
                         top.data.root_pos_w, top.data.root_quat_w, leg.data.root_pos_w, leg.data.root_quat_w
@@ -130,7 +152,8 @@ def main() -> None:
                     yaw_now = torch.rad2deg(torch.atan2(2 * (w * zq + x * y), 1 - 2 * (y * y + zq * zq)))
                     print(
                         f"[smoke] drop step {i:4d}: height above seat {(rel_pos[:, 2] - rel_t[:, 2]).mean().item() * 1000:7.2f} mm  "
-                        f"twist {yaw_now.mean().item():7.1f} deg  upright cos {rotation_diag(rel_quat)[:, 2].mean().item():.3f}"
+                        f"twist {yaw_now.mean().item():7.1f} deg  upright cos {rotation_diag(rel_quat)[:, 2].mean().item():.3f}  "
+                        f"assembled {assembled_now(env).tolist()}"
                     )
             print("[smoke] read: reaches ~0 mm without turning = the fit is loose (no screwing needed);")
             print("[smoke]       stops a few mm up, or turns as it sinks = the thread is doing its job.")
@@ -150,9 +173,8 @@ def main() -> None:
             leg.write_root_pose_to_sim(torch.cat([seated_pos, seated_quat], dim=-1))
             leg.write_root_velocity_to_sim(zero_vel)
             _watch(env, leg, top, seated_pos, min(10, args.settle), zero, f"yaw {yaw_deg:.0f}")
-            for _ in range(args.settle - (min(10, args.settle) if args.slow else 0)):
-                env.step(zero)
-            t = tracker(env)
+            physics_steps(env, args.settle - (min(10, args.settle) if args.slow else 0))
+            now = assembled_now(env)
             drift = (leg.data.root_pos_w - seated_pos).norm(dim=-1)
             # where the leg ended up in the top's frame: the yaw it settled to (the thread
             # phase, if it screwed itself in) and the axis cosines the assembled check reads
@@ -162,17 +184,17 @@ def main() -> None:
             w, x, y, zq = rel_quat.unbind(-1)
             final_yaw = torch.rad2deg(torch.atan2(2 * (w * zq + x * y), 1 - 2 * (y * y + zq * zq)))
             diag = rotation_diag(rel_quat)
-            results.append((yaw_deg, drift.mean().item(), t.assembled[:, 0].float().mean().item()))
+            results.append((yaw_deg, drift.mean().item(), now.float().mean().item()))
             print(
                 f"[smoke] yaw {yaw_deg:6.1f} -> {final_yaw.mean().item():7.1f} deg  drift {drift.mean().item():.4f} m "
                 f"(max {drift.max().item():.4f})  rel z {rel_pos[:, 2].mean().item():.4f}  "
-                f"axis cos {[f'{v:.3f}' for v in diag.mean(0).tolist()]}  assembled {t.assembled[:, 0].tolist()}"
+                f"axis cos {[f'{v:.3f}' for v in diag.mean(0).tolist()]}  assembled {now.tolist()}"
             )
         best = min(results, key=lambda r: r[1])
         print(f"[smoke] least drift at yaw {best[0]:.1f} deg: {best[1]:.4f} m, assembled rate {best[2]:.2f}")
-        print("[smoke] read: seated runs that converge to one final yaw = the thread's phase;")
-        print("[smoke]       axis cos z ~1 with x/y < 0.94 = seated but turned, so the check's")
-        print("[smoke]       orientation rule (all three axes) is what rejects it.")
+        print("[smoke] read: small drift = the pose is physically consistent at that twist;")
+        print("[smoke]       assembled True = upstream's rule (all axes within ~20 deg, position")
+        print("[smoke]       within tolerance) accepts it. In the real env success ends the episode.")
 
     env.close()
 
