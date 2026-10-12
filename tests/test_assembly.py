@@ -93,7 +93,7 @@ def test_pairs_assembled_agrees_with_upstream(seed):
     """Random poses near and far from every hole, with and without small rotations."""
     rng = np.random.default_rng(seed)
     pairs = st.ONE_LEG_PAIRS
-    targets = st.rel_pose_targets(pairs)  # (1, 4, 3)
+    targets = st.rel_pose_targets(pairs, "obj")  # (1, 4, 3)
     thr = np.array(st.ASSEMBLED_POS_THRESHOLD)
 
     N = 400
@@ -147,7 +147,7 @@ def test_pairs_assembled_agrees_with_upstream(seed):
 def test_tracker_latches_and_pays_once():
     pairs = st.ONE_LEG_PAIRS
     tracker = AssemblyTracker(
-        3, pairs, st.rel_pose_targets(pairs), st.ASSEMBLED_POS_THRESHOLD, st.ORI_BOUND, "cpu"
+        3, pairs, st.rel_pose_targets(pairs, "obj"), st.ASSEMBLED_POS_THRESHOLD, st.ORI_BOUND, "cpu"
     )
     pos = torch.zeros(3, 5, 3)
     quat = torch.tensor([1.0, 0, 0, 0]).repeat(3, 5, 1)
@@ -176,7 +176,7 @@ def test_screwed_but_rotated_leg_is_not_assembled():
     """Upstream checks all three axes, so a leg seated at the right height but turned 45 deg
     about the screw axis (the top's y) does not count. Documented, not a choice of this port."""
     pairs = st.ONE_LEG_PAIRS
-    targets = torch.tensor(st.rel_pose_targets(pairs))
+    targets = torch.tensor(st.rel_pose_targets(pairs, "obj"))  # OBJ frame: screw axis is y
     pos = torch.zeros(1, 5, 3)
     quat = torch.tensor([1.0, 0, 0, 0]).repeat(1, 5, 1)
     pos[0, 4] = torch.tensor([0.05625, 0.046875, 0.05625])

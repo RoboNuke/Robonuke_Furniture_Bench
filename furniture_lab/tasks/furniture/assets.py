@@ -2,13 +2,9 @@
 
 Imports Isaac Lab, so only import this after ``AppLauncher``.
 
-**Part USDs** come from ``$FURNITURE_ASSETS_DIR``: one ``<part name>.usd`` per part
-(``square_table_top.usd``, ``square_table_leg1.usd`` ... ``square_table_leg4.usd``). If a
-per-leg file is missing, ``square_table_leg.usd`` or UWLab's ``square_leg.usd`` serves every
-leg. Make them with ``tools/convert_assets.py`` (SDF collision, which the thread needs), or
-point the variable at a folder holding UWLab's two files and set
-``FURNITURE_MESH_FRAME=uwlab`` (their meshes are rotated relative to the OBJs; see
-``square_table.MESH_FRAMES``). ``tools/check_usd.py`` shows what a file holds.
+**Part USDs** are the repo's own, under ``assets/`` (UWLab's files and layout); which folder
+serves which part is a row of :mod:`.catalog`, and that row also names the mesh frame the
+file uses (``square_table.MESH_FRAMES``). Nothing is read from the environment.
 
 The robot is Isaac Lab's Panda with the arm joints switched to pure effort control (zero PD
 in the implicit actuators) so the operational-space action term owns the torque, as in
@@ -18,19 +14,14 @@ compensation. The gripper keeps its PD and is driven by a binary position action
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab_assets.robots.franka import FRANKA_PANDA_CFG
 
-from . import frames
+from . import catalog, frames
 from .square_table import PART_FRICTION, TABLE_FRICTION, PartSpec, reset_pose_world
 
 __all__ = [
-    "ASSETS_DIR_VAR",
-    "assets_dir",
     "part_usd_path",
     "part_cfg",
     "fixture_cfg",
@@ -39,41 +30,14 @@ __all__ = [
     "FRANKA_OSC_CFG",
 ]
 
-ASSETS_DIR_VAR = "FURNITURE_ASSETS_DIR"
-
-
-def assets_dir() -> Path:
-    value = os.environ.get(ASSETS_DIR_VAR)
-    if not value:
-        raise RuntimeError(
-            f"{ASSETS_DIR_VAR} is not set. Point it at the folder holding the part USDs "
-            "(see tools/convert_assets.py)."
-        )
-    return Path(value).expanduser()
-
-
-#: file names tried for a part, in order: its own, then shared ones (UWLab's ``square_leg.usd``
-#: serves every leg)
-_CANDIDATES = {
-    "square_table_top": ("square_table_top.usd",),
-    **{f"square_table_leg{i}": (f"square_table_leg{i}.usd", "square_table_leg.usd", "square_leg.usd") for i in range(1, 5)},
-}
-
-
 def part_usd_path(name: str) -> str:
-    """``<assets>/<name>.usd``, or a shared leg file for a leg without its own."""
-    root = assets_dir()
-    for candidate in _CANDIDATES[name]:
-        path = root / candidate
-        if path.exists():
-            return str(path)
-    raise FileNotFoundError(
-        f"no USD for part {name!r} in {root}: looked for " + ", ".join(_CANDIDATES[name])
-    )
+    """The part's USD in the repo's ``assets/`` folder (:mod:`.catalog`)."""
+    return catalog.usd_path(name)
 
 
 def part_cfg(part: PartSpec) -> RigidObjectCfg:
-    """A furniture part as a free rigid body at its FurnitureBench reset pose.
+    """A furniture part as a free rigid body at its FurnitureBench reset pose (expressed for
+    the frame its USD uses).
 
     The solver iteration counts and contact offsets mirror FurnitureBench's Isaac Gym
     ``sim_params`` (20 position / 1 velocity iterations, contact offset 2 mm, rest offset

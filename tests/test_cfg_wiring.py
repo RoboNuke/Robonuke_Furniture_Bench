@@ -7,6 +7,7 @@ arm not switched to effort control. What it cannot: anything about simulation.
 
 import importlib
 import os
+import os
 import sys
 from pathlib import Path
 
@@ -19,10 +20,7 @@ from furniture_lab.tasks.furniture import frames, square_table as st  # noqa: E4
 
 
 @pytest.fixture
-def cfg_module(tmp_path, monkeypatch):
-    for name in ("square_table_top", "square_table_leg"):
-        (tmp_path / f"{name}.usd").touch()
-    monkeypatch.setenv("FURNITURE_ASSETS_DIR", str(tmp_path))
+def cfg_module():
     uninstall = isaaclab_stub.install()
     try:
         yield importlib.import_module("furniture_lab.tasks.assembly.assembly_env_cfg")
@@ -39,15 +37,11 @@ def test_scene_holds_every_part_at_its_reset_pose(cfg_module):
         assert tuple(entry.init_state.pos) == pytest.approx(pos)
         assert tuple(entry.init_state.rot) == pytest.approx(quat)
         assert entry.spawn.mass_props.mass == part.mass
-        assert entry.spawn.usd_path.endswith(".usd")
+        assert os.path.isfile(entry.spawn.usd_path)  # the repo's own assets/
     assert cfg.furniture.part_names == st.PART_NAMES
     assert cfg.furniture.task == "one_leg"
+    assert cfg.furniture.mesh_frame == "uwlab"
     assert cfg_module.SquareTableEnvCfg().furniture.task == "square_table"
-
-
-def test_shared_leg_usd_is_used_when_no_per_leg_file(cfg_module):
-    cfg = cfg_module.OneLegEnvCfg()
-    assert cfg.scene.square_table_leg3.spawn.usd_path.endswith("square_table_leg.usd")
 
 
 def test_robot_arm_is_effort_controlled_with_reset_joints(cfg_module):
@@ -123,28 +117,3 @@ def test_registry_entry_points_resolve(cfg_module):
         assert getattr(importlib.import_module(mod), attr).__name__ == cls
         mod, attr = spec.entry_point.split(":")
         assert hasattr(importlib.import_module(mod), attr)
-
-
-def test_missing_assets_dir_is_a_clear_error(tmp_path, monkeypatch):
-    monkeypatch.delenv("FURNITURE_ASSETS_DIR", raising=False)
-    uninstall = isaaclab_stub.install()
-    try:
-        with pytest.raises(RuntimeError, match="FURNITURE_ASSETS_DIR"):
-            importlib.import_module("furniture_lab.tasks.assembly.assembly_env_cfg")
-    finally:
-        uninstall()
-
-
-def test_uwlab_file_names_are_accepted(tmp_path, monkeypatch):
-    for name in ("square_table_top", "square_leg"):
-        (tmp_path / f"{name}.usd").touch()
-    monkeypatch.setenv("FURNITURE_ASSETS_DIR", str(tmp_path))
-    monkeypatch.setenv("FURNITURE_MESH_FRAME", "uwlab")
-    uninstall = isaaclab_stub.install()
-    try:
-        mod = importlib.import_module("furniture_lab.tasks.assembly.assembly_env_cfg")
-        cfg = mod.OneLegEnvCfg()
-        assert cfg.scene.square_table_leg4.spawn.usd_path.endswith("square_leg.usd")
-        assert cfg.furniture.mesh_frame == "uwlab"
-    finally:
-        uninstall()

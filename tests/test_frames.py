@@ -101,16 +101,6 @@ def test_uwlab_reset_poses_keep_parts_flat_and_bolts_toward_the_robot():
     assert np.allclose(_quat_to_mat(st.reset_pose_world(top, "uwlab")[1]) @ [0, 0, 1], [0, 0, 1], atol=1e-9)
 
 
-def test_mesh_frame_env_var(monkeypatch):
-    monkeypatch.delenv(st.MESH_FRAME_VAR, raising=False)
-    assert st.mesh_frame() == "obj"
-    monkeypatch.setenv(st.MESH_FRAME_VAR, "uwlab")
-    assert st.mesh_frame() == "uwlab"
-    monkeypatch.setenv(st.MESH_FRAME_VAR, "bogus")
-    with pytest.raises(ValueError):
-        st.mesh_frame()
-
-
 def _quat_to_mat(q):
     w, x, y, z = q
     return np.array(

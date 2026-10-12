@@ -13,6 +13,7 @@ Isaac Lab env**, as a project on [robonuke_rl_core](https://github.com/RoboNuke/
 | the env class (publishes `episode/success` for the package) | `furniture_lab/tasks/assembly/assembly_env.py` |
 | the MDP terms | `furniture_lab/tasks/assembly/mdp/` |
 | task registration: `Isaac-Furniture-OneLeg-v0`, `Isaac-Furniture-SquareTable-v0` | `furniture_lab/tasks/__init__.py` |
+| asset catalog: part name -> `assets/` folder, mesh frame, metadata | `furniture_lab/tasks/furniture/catalog.py` |
 | OBJ -> USD (SDF collision) and USD inspection | `tools/convert_assets.py`, `tools/check_usd.py` |
 
 The docstring at the top of `assembly_env_cfg.py` lists, item by item, what is copied from
@@ -27,33 +28,16 @@ upstream and what is this port's choice.
    pip install -e ~/robonuke_rl_core
    ```
 
-2. Part USDs, one of two ways, into a folder `FURNITURE_ASSETS_DIR` points at:
+2. Part USDs are in the repo (`assets/`, UWLab's files and layout, with their
+   `metadata.yaml`). `furniture_lab/tasks/furniture/catalog.py` maps each FurnitureBench
+   part name to its folder and records the file's mesh frame (UWLab's meshes are rotated
+   relative to FurnitureBench's OBJs; the port corrects for it, and their metadata agrees
+   with the corrected assembled pose to 0.35 mm -- `tests/test_catalog.py`). Nothing to set.
 
-   * **UWLab's files** (`square_leg.usd`, `square_table_top.usd` from the `UW-Lab/uwlab-assets`
-     dataset, `Props/FurnitureBench/`): both keep the thread as SDF collision, but their mesh
-     frames are rotated relative to FurnitureBench's OBJs (leg axis / top thickness along
-     `z` instead of `y`), so also set
-
-     ```bash
-     export FURNITURE_ASSETS_DIR=~/furniture_assets   # the two .usd files, directly in it
-     export FURNITURE_MESH_FRAME=uwlab
-     ```
-
-     The rotation *about* that axis cannot be read off the files; the port assumes both
-     parts were rotated the same way (`square_table.MESH_FRAMES`). Check it in the sim by
-     teleporting a leg to its assembled pose before trusting a training run.
-
-   * **A straight conversion** of the OBJs with SDF collision (`FURNITURE_MESH_FRAME=obj`,
-     the default):
-
-     ```bash
-     FURNITURE_BENCH=~/IsaacGym_Preview_4_Package/furniture-bench \
-         python tools/convert_assets.py --out ~/furniture_assets --headless
-     export FURNITURE_ASSETS_DIR=~/furniture_assets
-     ```
-
-   `python tools/check_usd.py <file.usd>` shows what a file holds (needs `pxr`:
-   `pip install usd-core`). The `.usd` files inside furniture-bench itself are visual-only.
+   `python tools/check_usd.py assets/SquareLeg/square_leg.usd` shows what a file holds
+   (needs `pxr`: `pip install usd-core`). `tools/convert_assets.py` rebuilds USDs from
+   FurnitureBench's OBJs with SDF collision if ever needed; such a file is in the OBJ frame,
+   so its catalog row would say `frame="obj"`.
 
 3. Run (from the repo root, with the Isaac Lab env active):
 

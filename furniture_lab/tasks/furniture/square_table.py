@@ -18,12 +18,12 @@ prints the bounds to compare.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from . import catalog
 from .frames import rot_mat, tag_to_world
 
 __all__ = [
@@ -38,7 +38,6 @@ __all__ = [
     "PART_FRICTION",
     "TABLE_FRICTION",
     "MESH_FRAMES",
-    "MESH_FRAME_VAR",
     "mesh_frame",
     "reset_pose_world",
     "rel_pose_targets",
@@ -106,26 +105,26 @@ TABLE_FRICTION = 0.10
 # ------------------------------------------------------------------------ mesh frames
 #: How a part USD's frame relates to upstream's OBJ frame: ``p_usd = R @ p_obj``.
 #:
-#: ``obj``   -- the USD is a straight conversion of the OBJ (``tools/convert_assets.py``).
-#: ``uwlab`` -- UWLab's ``square_leg.usd`` / ``square_table_top.usd``: the leg's long axis
-#:              and the top's thickness run along USD ``z`` where the OBJ has ``y``, with the
-#:              same ranges (bolt at -z, plate at -z), i.e. ``Rx(+90 deg)``. The rotation
-#:              about that axis cannot be read off the bounds; it is assumed to be the same
-#:              for both parts, which the seated-leg orientation check relies on. Verify by
-#:              teleporting a leg to its assembled pose before trusting a training run.
+#: ``obj``   -- a straight conversion of the OBJ (``tools/convert_assets.py``).
+#: ``uwlab`` -- UWLab's USDs (what ``assets/`` holds): the leg's long axis and the top's
+#:              thickness run along USD ``z`` where the OBJ has ``y``, same ranges (bolt at
+#:              -z, plate at -z), i.e. ``Rx(+90 deg)``. UWLab's ``metadata.yaml`` gives the
+#:              seated leg the identity orientation and z = 0.047223 in the top's frame,
+#:              against 0.046875 here (``tests/test_catalog.py``), so both parts were
+#:              rotated the same way.
+#: Which frame a part's file uses is a row of :mod:`.catalog`.
 MESH_FRAMES: Dict[str, np.ndarray] = {
     "obj": np.eye(3),
     "uwlab": rot_mat((np.pi / 2, 0.0, 0.0)),
 }
-MESH_FRAME_VAR = "FURNITURE_MESH_FRAME"
 
 
-def mesh_frame() -> str:
-    """``$FURNITURE_MESH_FRAME`` (default ``obj``), validated."""
-    name = os.environ.get(MESH_FRAME_VAR, "obj")
-    if name not in MESH_FRAMES:
-        raise ValueError(f"{MESH_FRAME_VAR}={name!r}; expected one of {sorted(MESH_FRAMES)}")
-    return name
+def mesh_frame(parts: Sequence["PartSpec"] = None) -> str:
+    """The one mesh frame the furniture's asset files share (the catalog says which)."""
+    names = {catalog.mesh_frame_of(p.name) for p in (parts if parts is not None else PARTS)}
+    if len(names) != 1:
+        raise ValueError(f"the parts' USDs use different mesh frames {sorted(names)}; one is required")
+    return names.pop()
 
 
 def reset_pose_world(

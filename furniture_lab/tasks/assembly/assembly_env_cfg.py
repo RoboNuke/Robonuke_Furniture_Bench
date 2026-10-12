@@ -9,9 +9,8 @@ What is upstream and what is this port's choice:
 
 * **Scene**: upstream's layout to the millimetre (:mod:`..furniture.frames`), a Panda at the
   origin, all five parts at their from-scratch reset poses, the table and the three
-  obstacles as boxes. Part USDs come from ``$FURNITURE_ASSETS_DIR``; their mesh frame from
-  ``$FURNITURE_MESH_FRAME`` (``obj`` for a straight conversion, ``uwlab`` for UWLab's files,
-  see ``square_table.MESH_FRAMES``).
+  obstacles as boxes. Part USDs are the repo's ``assets/`` (``furniture.catalog`` maps part
+  to file and names the file's mesh frame, ``square_table.MESH_FRAMES``).
 * **Physics**: upstream's Isaac Gym ``sim_params`` (TGS solver, bounce 0.02,
   friction offset 0.01 / correlation 0.0005, contact offset 2 mm), friction 0.15 on parts
   and 0.10 on the table. Upstream steps at dt 1/60 with 2 substeps and 3 steps per action,
@@ -107,8 +106,8 @@ class FurnitureCfg:
 
     task: str = MISSING  # "one_leg" | "square_table"
     part_names: List[str] = PART_NAMES
-    #: which mesh frame the part USDs use ($FURNITURE_MESH_FRAME: "obj" or "uwlab"); the
-    #: scene's reset orientations and the assembled targets are both expressed in it
+    #: the mesh frame the part USDs use (from the catalog); the scene's reset orientations
+    #: and the assembled targets are both expressed in it
     mesh_frame: str = mesh_frame()
     assembled_pos_threshold: Tuple[float, float, float] = ASSEMBLED_POS_THRESHOLD
     ori_bound: float = ORI_BOUND
