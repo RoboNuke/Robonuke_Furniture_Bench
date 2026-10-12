@@ -35,6 +35,11 @@ parser.add_argument(
 )
 parser.add_argument("--settle", type=int, default=20, help="steps after the teleport before measuring")
 parser.add_argument(
+    "--slow", action="store_true",
+    help="viewer only: hold the placed pose ~2 s before physics runs, render every physics step "
+    "(not every 6th), and print the leg's height for the first steps -- to watch an ejection",
+)
+parser.add_argument(
     "--drop", type=float, default=None, metavar="HEIGHT",
     help="instead of seating: hold the leg aligned HEIGHT m above the seat and release it. Does it "
     "fall to the seat without turning (loose fit, peg-in-hole) or stop on the thread (a real screw)?",
@@ -55,9 +60,29 @@ from furniture_lab.tasks.furniture import catalog  # noqa: E402
 from furniture_lab.tasks.furniture.square_table import rel_pose_targets  # noqa: E402
 
 
+def _watch(env, leg, top, seated_pos, steps: int, zero: torch.Tensor, label: str) -> None:
+    """Hold the placed pose on screen, then step physics with a per-step height trace."""
+    if not args.slow:
+        return
+    for _ in range(120):
+        env.sim.render()  # ~2 s at 60 fps, physics frozen: this is the pose as placed
+    for i in range(steps):
+        env.step(zero)
+        rel_pos, rel_quat = relative_pose(
+            top.data.root_pos_w, top.data.root_quat_w, leg.data.root_pos_w, leg.data.root_quat_w
+        )
+        print(
+            f"[smoke] {label} step {i:3d}: rel z {rel_pos[:, 2].mean().item() * 1000:7.2f} mm  "
+            f"upright cos {rotation_diag(rel_quat)[:, 2].mean().item():.3f}  "
+            f"|v| {leg.data.root_lin_vel_w.norm(dim=-1).mean().item():.3f} m/s"
+        )
+
+
 def main() -> None:
     cfg = load_cfg_from_registry(args.task, "env_cfg_entry_point")
     cfg.scene.num_envs = args.num_envs
+    if args.slow:
+        cfg.sim.render_interval = 1  # a frame per physics step: 6x slower on screen
     env = gym.make(args.task, cfg=cfg).unwrapped
     obs, _ = env.reset()
     print(f"[smoke] task {args.task}: {env.num_envs} envs, mesh frame {cfg.furniture.mesh_frame}")
@@ -124,7 +149,8 @@ def main() -> None:
             seated_quat = quat_mul(top_quat, quat_from_euler_xyz(z, z, yaw))
             leg.write_root_pose_to_sim(torch.cat([seated_pos, seated_quat], dim=-1))
             leg.write_root_velocity_to_sim(zero_vel)
-            for _ in range(args.settle):
+            _watch(env, leg, top, seated_pos, min(10, args.settle), zero, f"yaw {yaw_deg:.0f}")
+            for _ in range(args.settle - (min(10, args.settle) if args.slow else 0)):
                 env.step(zero)
             t = tracker(env)
             drift = (leg.data.root_pos_w - seated_pos).norm(dim=-1)
