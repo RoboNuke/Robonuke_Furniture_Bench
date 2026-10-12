@@ -41,9 +41,10 @@ def part_cfg(part: PartSpec) -> RigidObjectCfg:
 
     The solver iteration counts and contact offsets mirror FurnitureBench's Isaac Gym
     ``sim_params`` (20 position / 1 velocity iterations, contact offset 2 mm, rest offset
-    0). The mass is upstream's measured one. Friction is set by the startup event in the
-    env cfg (``randomize_rigid_body_material`` at a fixed value), because a USD spawn has no
-    physics-material field.
+    0). Mass and friction are set by startup events in the env cfg
+    (``randomize_rigid_body_mass`` / ``randomize_rigid_body_material`` at fixed values): a
+    USD spawn has no physics-material field, and UWLab's files carry no ``MassAPI`` for a
+    spawn-time ``mass_props`` to modify.
     """
     pos, quat = reset_pose_world(part)
     return RigidObjectCfg(
@@ -58,7 +59,6 @@ def part_cfg(part: PartSpec) -> RigidObjectCfg:
                 max_depenetration_velocity=5.0,
                 enable_gyroscopic_forces=True,
             ),
-            mass_props=sim_utils.MassPropertiesCfg(mass=part.mass),
             collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.002, rest_offset=0.0),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(pos=pos, rot=quat),

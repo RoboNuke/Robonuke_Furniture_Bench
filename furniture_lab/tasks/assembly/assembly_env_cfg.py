@@ -166,6 +166,20 @@ class ObservationsCfg:
     policy: PolicyCfg = PolicyCfg()
 
 
+def _mass_event(part: str, mass: float) -> EventTerm:
+    """Set a part's mass once at startup (UWLab's USDs have no MassAPI for the spawn to edit)."""
+    return EventTerm(
+        func=mdp.randomize_rigid_body_mass,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg(part),
+            "mass_distribution_params": (mass, mass),
+            "operation": "abs",
+            "recompute_inertia": True,
+        },
+    )
+
+
 def _friction_event(part: str, friction: float) -> EventTerm:
     """Set a part's friction once at startup (a USD spawn has no material field)."""
     return EventTerm(
@@ -183,7 +197,12 @@ def _friction_event(part: str, friction: float) -> EventTerm:
 
 @configclass
 class EventCfg:
-    # -- startup: upstream's part friction
+    # -- startup: upstream's measured masses and part friction
+    top_mass = _mass_event("square_table_top", PARTS[0].mass)
+    leg1_mass = _mass_event("square_table_leg1", PARTS[1].mass)
+    leg2_mass = _mass_event("square_table_leg2", PARTS[2].mass)
+    leg3_mass = _mass_event("square_table_leg3", PARTS[3].mass)
+    leg4_mass = _mass_event("square_table_leg4", PARTS[4].mass)
     top_friction = _friction_event("square_table_top", PART_FRICTION)
     leg1_friction = _friction_event("square_table_leg1", PART_FRICTION)
     leg2_friction = _friction_event("square_table_leg2", PART_FRICTION)

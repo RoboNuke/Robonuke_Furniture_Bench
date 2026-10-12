@@ -127,7 +127,7 @@ def install():
         )},
     )
     # ---- envs and stock mdp
-    stock = ("last_action", "time_out", "reset_scene_to_default", "randomize_rigid_body_material")
+    stock = ("last_action", "time_out", "reset_scene_to_default", "randomize_rigid_body_material", "randomize_rigid_body_mass")
     mdp = module("isaaclab.envs.mdp", __all__=list(stock), **{n: (lambda *a, **k: None) for n in stock})
     for n in stock:
         getattr(mdp, n).__name__ = n

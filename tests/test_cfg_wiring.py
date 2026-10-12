@@ -36,7 +36,6 @@ def test_scene_holds_every_part_at_its_reset_pose(cfg_module):
         assert entry.prim_path == "{ENV_REGEX_NS}/" + part.name
         assert tuple(entry.init_state.pos) == pytest.approx(pos)
         assert tuple(entry.init_state.rot) == pytest.approx(quat)
-        assert entry.spawn.mass_props.mass == part.mass
         assert os.path.isfile(entry.spawn.usd_path)  # the repo's own assets/
     assert cfg.furniture.part_names == st.PART_NAMES
     assert cfg.furniture.task == "one_leg"
@@ -86,8 +85,14 @@ def test_reset_events_run_in_order(cfg_module):
     assert names == ["reset_scene", "reset_parts", "reset_assembly"]
     assert events.reset_parts.params == {"pos_range": 0.015, "yaw_range_deg": 15.0, "max_tries": 20}
     startup = [v for v in vars(events).values() if getattr(v, "mode", None) == "startup"]
-    assert sorted(v.params["asset_cfg"]._args[0] for v in startup) == sorted(st.PART_NAMES)
-    assert all(v.params["static_friction_range"] == (st.PART_FRICTION,) * 2 for v in startup)
+    friction = [v for v in startup if "static_friction_range" in v.params]
+    mass = [v for v in startup if "mass_distribution_params" in v.params]
+    assert sorted(v.params["asset_cfg"]._args[0] for v in friction) == sorted(st.PART_NAMES)
+    assert all(v.params["static_friction_range"] == (st.PART_FRICTION,) * 2 for v in friction)
+    assert {v.params["asset_cfg"]._args[0]: v.params["mass_distribution_params"][0] for v in mass} == {
+        p.name: p.mass for p in st.PARTS
+    }
+    assert all(v.params["operation"] == "abs" for v in mass)
 
 
 def test_timing_matches_upstream(cfg_module):

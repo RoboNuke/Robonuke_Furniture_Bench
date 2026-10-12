@@ -25,17 +25,27 @@ parser.add_argument("--num_envs", type=int, default=2)
 parser.add_argument("--steps", type=int, default=50)
 parser.add_argument("--teleport", action="store_true", help="seat leg 4 in the top, then check")
 parser.add_argument("--hole", type=int, default=0, help="which of the 4 holes to seat it in")
+parser.add_argument(
+    "--seat", choices=["metadata", "furniturebench"], default="metadata",
+    help="seat height: UWLab's metadata.yaml (bolt tip just above the plate) or upstream's number",
+)
+parser.add_argument(
+    "--yaws", type=str, default="0,30,60,90,120,150,180,210,240,270,300,330",
+    help="yaw angles (deg) about the screw axis to try; the thread phase is unknown",
+)
+parser.add_argument("--settle", type=int, default=20, help="steps after the teleport before measuring")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 app = AppLauncher(args).app
 
 import gymnasium as gym  # noqa: E402
 import torch  # noqa: E402
-from isaaclab.utils.math import quat_apply  # noqa: E402
+from isaaclab.utils.math import quat_apply, quat_from_euler_xyz, quat_mul  # noqa: E402
 from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry  # noqa: E402
 
 import furniture_lab.tasks  # noqa: E402, F401
 from furniture_lab.tasks.assembly.mdp.state import parts_pose_w, tracker  # noqa: E402
+from furniture_lab.tasks.furniture import catalog  # noqa: E402
 from furniture_lab.tasks.furniture.square_table import rel_pose_targets  # noqa: E402
 
 
@@ -59,23 +69,43 @@ def main() -> None:
     if args.teleport:
         names = cfg.furniture.part_names
         top, leg = env.scene[names[0]], env.scene[names[4]]
-        rel = torch.tensor(
-            rel_pose_targets([(0, 4)], cfg.furniture.mesh_frame)[0, args.hole],
-            dtype=torch.float32, device=env.device,
-        ).expand(env.num_envs, -1)
-        top_pos, top_quat = top.data.root_pos_w.clone(), top.data.root_quat_w.clone()
-        seated_pos = top_pos + quat_apply(top_quat, rel)
-        leg.write_root_pose_to_sim(torch.cat([seated_pos, top_quat], dim=-1))
-        leg.write_root_velocity_to_sim(torch.zeros(env.num_envs, 6, device=env.device))
-        for _ in range(20):
-            env.step(zero)
-        t = tracker(env)
-        drift = (leg.data.root_pos_w - seated_pos).norm(dim=-1)
-        print(f"[smoke] teleport hole {args.hole}: assembled {t.all_assembled().tolist()}")
-        print(f"[smoke] leg drift after 20 steps (m): {[f'{v:.4f}' for v in drift.tolist()]}")
-        print("[smoke] assembled + small drift = frames and seated pose are right;")
-        print("[smoke] big drift = the SDF contact rejected the pose (frame or thread phase);")
-        print("[smoke] small drift but not assembled = the assembled check's numbers are off.")
+        rel = rel_pose_targets([(0, 4)], cfg.furniture.mesh_frame)[0, args.hole].copy()
+        if args.seat == "metadata":
+            # UWLab's seat: their assembled points coincide; only the height differs from
+            # upstream's (bolt tip 0.3 mm above the plate instead of 0.7 mm into its hull)
+            meta_top = catalog.metadata(names[0])["assembled_offset"]["pos"]
+            meta_leg = catalog.metadata(names[4])["assembled_offset"]["pos"]
+            rel[2] = meta_top[2] - meta_leg[2]
+        rel_t = torch.tensor(rel, dtype=torch.float32, device=env.device).expand(env.num_envs, -1)
+        print(f"[smoke] seat ({args.seat}) in the top's frame: {rel.round(5).tolist()}")
+        zero_vel = torch.zeros(env.num_envs, 6, device=env.device)
+        results = []
+        for yaw_deg in [float(v) for v in args.yaws.split(",")]:
+            env.reset()
+            for _ in range(5):
+                env.step(zero)  # let the parts settle after the reset
+            top_pos, top_quat = top.data.root_pos_w.clone(), top.data.root_quat_w.clone()
+            seated_pos = top_pos + quat_apply(top_quat, rel_t)
+            yaw = torch.full((env.num_envs,), yaw_deg * 3.141592653589793 / 180.0, device=env.device)
+            z = torch.zeros_like(yaw)
+            # the twist is about the leg's own z (the screw axis): post-multiply
+            seated_quat = quat_mul(top_quat, quat_from_euler_xyz(z, z, yaw))
+            leg.write_root_pose_to_sim(torch.cat([seated_pos, seated_quat], dim=-1))
+            leg.write_root_velocity_to_sim(zero_vel)
+            for _ in range(args.settle):
+                env.step(zero)
+            t = tracker(env)
+            drift = (leg.data.root_pos_w - seated_pos).norm(dim=-1)
+            results.append((yaw_deg, drift.mean().item(), t.assembled[:, 0].float().mean().item()))
+            print(
+                f"[smoke] yaw {yaw_deg:6.1f} deg: drift {drift.mean().item():.4f} m "
+                f"(max {drift.max().item():.4f})  assembled {t.assembled[:, 0].tolist()}"
+            )
+        best = min(results, key=lambda r: r[1])
+        print(f"[smoke] least drift at yaw {best[0]:.1f} deg: {best[1]:.4f} m, assembled rate {best[2]:.2f}")
+        print("[smoke] read: drift < ~2 mm at some yaw = the thread seats at that phase;")
+        print("[smoke]       large drift at every yaw = the seat height or the frame is wrong;")
+        print("[smoke]       seats but 'assembled' False = the check's orientation/position numbers.")
 
     env.close()
 

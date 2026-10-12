@@ -54,25 +54,24 @@ class PartSpec:
     reset_rot_tag: np.ndarray
     #: kg, from the ``sim_config`` comments ("Mass: 151g", "Mass: 23.1g")
     mass: float
-    #: radius of a disc that covers the part's footprint lying flat, for the reset-time
-    #: collision rejection (upstream rejects overlapping axis-aligned boxes; a disc is the
-    #: conservative batched stand-in)
-    footprint_radius: float
+    #: half-extents (x, y) of the part's footprint lying flat at its nominal reset yaw, in the
+    #: robot-base frame -- the box upstream's reset-time collision rejection uses
+    footprint: Tuple[float, float]
 
 
 _LEG_ROT = rot_mat((0.0, -np.pi / 2, 0.0))
 _TOP_ROT = rot_mat((-np.pi / 2, 0.0, np.pi))
 
-#: table-top footprint: 0.1625 square -> half-diagonal; leg: 0.0875 long, 0.03 wide
-_TOP_RADIUS = 0.1625 * np.sqrt(2) / 2
-_LEG_RADIUS = 0.0875 / 2 + 0.005
+#: table-top: 0.1625 square; leg: 0.0875 long along the robot's x at reset, 0.03 wide
+_TOP_FOOT = (0.1625 / 2, 0.1625 / 2)
+_LEG_FOOT = (0.0875 / 2, 0.03 / 2)
 
 PARTS: List[PartSpec] = [
-    PartSpec("square_table_top", 0, (0.0, 0.24, -0.015625), _TOP_ROT, 0.151, _TOP_RADIUS),
-    PartSpec("square_table_leg1", 1, (-0.20, 0.07, -0.015), _LEG_ROT, 0.0231, _LEG_RADIUS),
-    PartSpec("square_table_leg2", 2, (-0.12, 0.07, -0.015), _LEG_ROT, 0.0231, _LEG_RADIUS),
-    PartSpec("square_table_leg3", 3, (0.12, 0.07, -0.015), _LEG_ROT, 0.0231, _LEG_RADIUS),
-    PartSpec("square_table_leg4", 4, (0.20, 0.07, -0.015), _LEG_ROT, 0.0231, _LEG_RADIUS),
+    PartSpec("square_table_top", 0, (0.0, 0.24, -0.015625), _TOP_ROT, 0.151, _TOP_FOOT),
+    PartSpec("square_table_leg1", 1, (-0.20, 0.07, -0.015), _LEG_ROT, 0.0231, _LEG_FOOT),
+    PartSpec("square_table_leg2", 2, (-0.12, 0.07, -0.015), _LEG_ROT, 0.0231, _LEG_FOOT),
+    PartSpec("square_table_leg3", 3, (0.12, 0.07, -0.015), _LEG_ROT, 0.0231, _LEG_FOOT),
+    PartSpec("square_table_leg4", 4, (0.20, 0.07, -0.015), _LEG_ROT, 0.0231, _LEG_FOOT),
 ]
 PART_NAMES: List[str] = [p.name for p in PARTS]
 

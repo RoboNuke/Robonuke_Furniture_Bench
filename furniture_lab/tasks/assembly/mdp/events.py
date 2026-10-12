@@ -2,8 +2,9 @@
 
 Upstream (``Furniture.randomize_init_pose`` / ``Part.randomize_init_pose``) perturbs each
 part's reset pose by a uniform (x, y) offset and a uniform yaw about the table normal, then
-rejects the whole draw if any two parts' footprints overlap or a part leaves the parts
-position limits, and redraws. The levels are
+rejects the whole draw if any two parts' footprint boxes overlap or a part leaves the parts
+position limits, and redraws. (Here a yawed box is bounded by its axis-aligned box, which
+is slightly more conservative than upstream's unrotated boxes.) The levels are
 
     low:    +-0.015 m, +-15 deg      (the default)
     medium: +-0.05 m,  +-45 deg
@@ -60,9 +61,8 @@ def randomize_parts_pose(
     nominal_quat = torch.stack(
         [env.scene[name].data.default_root_state[env_ids, 3:7] for name in names], dim=1
     )
-    radius = torch.tensor([specs[name].footprint_radius for name in names], device=device)
-    min_dist = radius.unsqueeze(0) + radius.unsqueeze(1)  # (P, P)
-    min_dist.fill_diagonal_(0.0)
+    foot = torch.tensor([specs[name].footprint for name in names], device=device)  # (P, 2)
+    eye = torch.eye(P, dtype=torch.bool, device=device)
 
     offset = torch.zeros(n, P, 3, device=device)
     yaw = torch.zeros(n, P, device=device)
@@ -74,10 +74,15 @@ def randomize_parts_pose(
             break
         offset[idx, :, :2] = (torch.rand(len(idx), P, 2, device=device) * 2 - 1) * pos_range
         yaw[idx] = (torch.rand(len(idx), P, device=device) * 2 - 1) * yaw_range
-        xy = (nominal_pos[idx, :, :2] + offset[idx, :, :2])
-        dist = torch.cdist(xy, xy)  # (k, P, P)
-        collides = (dist < min_dist).any(dim=(1, 2))
-        pending[idx] = collides
+        xy = nominal_pos[idx, :, :2] + offset[idx, :, :2]  # (k, P, 2)
+        # each part's footprint box, rotated by its yaw, bounded by an axis-aligned box
+        c, s = torch.cos(yaw[idx]).abs(), torch.sin(yaw[idx]).abs()  # (k, P)
+        hx = foot[:, 0] * c + foot[:, 1] * s
+        hy = foot[:, 0] * s + foot[:, 1] * c
+        dx = (xy[:, :, None, 0] - xy[:, None, :, 0]).abs()  # (k, P, P)
+        dy = (xy[:, :, None, 1] - xy[:, None, :, 1]).abs()
+        overlap = (dx < hx[:, :, None] + hx[:, None, :]) & (dy < hy[:, :, None] + hy[:, None, :])
+        pending[idx] = (overlap & ~eye).any(dim=(1, 2))
     if pending.any():
         print(
             f"[furniture] {int(pending.sum())} env(s) found no collision-free part layout in "

@@ -56,9 +56,10 @@ def test_parts_sit_behind_the_front_obstacle():
     side_x0 = frames.OBSTACLE_SIDE_POS["obstacle_left"][0] - frames.OBSTACLE_SIDE_SIZE[0] / 2
     for part in st.PARTS:
         pos, _ = st.reset_pose_world(part)
-        assert pos[0] + part.footprint_radius < front_x
-        if pos[0] + part.footprint_radius > side_x0:  # reaches into the bracketed span
-            assert abs(pos[1]) + part.footprint_radius < 0.175 - frames.OBSTACLE_SIDE_SIZE[1] / 2
+        hx, hy = part.footprint
+        assert pos[0] + hx < front_x
+        if pos[0] + hx > side_x0:  # reaches into the bracketed span
+            assert abs(pos[1]) + hy < 0.175 - frames.OBSTACLE_SIDE_SIZE[1] / 2
 
 
 def test_quaternions_are_unit_wxyz():
