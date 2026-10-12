@@ -3,6 +3,8 @@
     python scripts/smoke.py --headless                       # build + 50 zero-action steps
     python scripts/smoke.py --headless --teleport            # + seat leg 4 in the top, check
     python scripts/smoke.py --num_envs 4 --steps 200         # with the viewer
+    python scripts/smoke.py --headless --teleport --out seat.mp4 --num_envs 1 --yaws 0,90
+    python scripts/smoke.py --headless --teleport --drop 0.03 --out drop.mp4 --num_envs 1
 
 Needs no trained run and no package config: it goes straight to the gym registry. What it
 checks: the scene spawns, observation/action sizes, nothing explodes under zero actions, and
@@ -39,6 +41,15 @@ parser.add_argument(
 )
 parser.add_argument("--settle", type=int, default=20, help="steps after the teleport before measuring")
 parser.add_argument(
+    "--out", type=str, default=None, metavar="FILE.mp4",
+    help="record the experiments to an mp4 (works headless): one frame per physics step, with the "
+    "placed and measured twist in the bottom-right corner. Needs the package's recorder camera, "
+    "so it forces --enable_cameras and clone_in_fabric=False",
+)
+parser.add_argument("--fps", type=int, default=30, help="playback rate of --out (120 = real time)")
+parser.add_argument("--cam", type=str, default="0.95,0.45,0.35", help="camera eye x,y,z (robot-base frame)")
+parser.add_argument("--look", type=str, default="0.54,0.0,0.03", help="camera target x,y,z")
+parser.add_argument(
     "--slow", action="store_true",
     help="viewer only: hold the placed pose ~2 s before physics runs, render every physics step "
     "(not every 6th), and print the leg's height for the first steps -- to watch an ejection",
@@ -50,12 +61,21 @@ parser.add_argument(
 )
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
+if args.out:
+    args.enable_cameras = True  # a TiledCamera renders only with this
 app = AppLauncher(args).app
 
 import gymnasium as gym  # noqa: E402
 import torch  # noqa: E402
 from isaaclab.utils.math import quat_apply, quat_from_euler_xyz, quat_mul  # noqa: E402
 from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry  # noqa: E402
+
+from robonuke_rl_core.recording import (  # noqa: E402
+    VideoWriter,
+    install_recorder_camera,
+    read_camera_rgb,
+    recorder_camera,
+)
 
 import furniture_lab.tasks  # noqa: E402, F401
 from furniture_lab.tasks.assembly.mdp.state import parts_pose_w, tracker  # noqa: E402
@@ -64,14 +84,67 @@ from furniture_lab.tasks.furniture import catalog  # noqa: E402
 from furniture_lab.tasks.furniture.square_table import rel_pose_targets  # noqa: E402
 
 
+class Recorder:
+    """Writes one frame per physics step of env 0 to ``--out``, with a caption bottom-right."""
+
+    def __init__(self, env) -> None:
+        self.env = env
+        self.camera = recorder_camera(env)
+        eye = torch.tensor([[float(v) for v in args.cam.split(",")]], device=env.device)
+        look = torch.tensor([[float(v) for v in args.look.split(",")]], device=env.device)
+        origins = env.scene.env_origins[:1]
+        self.camera.set_world_poses_from_view(eye + origins, look + origins, env_ids=[0])
+        self.writer = VideoWriter(args.out, fps=args.fps)
+        self.caption = ""
+        self.frames = 0
+
+    def frame(self) -> None:
+        from PIL import Image, ImageDraw
+
+        self.camera.update(self.env.physics_dt)
+        rgb = read_camera_rgb(self.camera)[0].numpy()
+        image = Image.fromarray(rgb[..., :3])
+        if self.caption:
+            draw = ImageDraw.Draw(image)
+            lines = self.caption.split("\n")
+            pad, lh = 6, 14
+            box_w = max(len(line) for line in lines) * 7 + 2 * pad
+            box_h = len(lines) * lh + 2 * pad
+            x0, y0 = image.width - box_w - 8, image.height - box_h - 8
+            draw.rectangle([(x0, y0), (x0 + box_w, y0 + box_h)], fill=(0, 0, 0))
+            for i, line in enumerate(lines):
+                draw.text((x0 + pad, y0 + pad + i * lh), line, fill=(255, 255, 0))
+        self.writer.append(torch.from_numpy(__import__("numpy").asarray(image)))
+        self.frames += 1
+
+    def close(self) -> None:
+        self.writer.close()
+        print(f"[smoke] wrote {args.out}: {self.frames} frames at {args.fps} fps", flush=True)
+
+
+recorder: "Recorder | None" = None
+
+
+def measured_twist(env, top, leg) -> tuple:
+    """(twist deg, upright cos, rel z m) of the leg in the top's frame, env 0."""
+    rel_pos, rel_quat = relative_pose(
+        top.data.root_pos_w[:1], top.data.root_quat_w[:1], leg.data.root_pos_w[:1], leg.data.root_quat_w[:1]
+    )
+    w, x, y, zq = rel_quat.unbind(-1)
+    yaw = torch.rad2deg(torch.atan2(2 * (w * zq + x * y), 1 - 2 * (y * y + zq * zq)))
+    return yaw.item(), rotation_diag(rel_quat)[0, 2].item(), rel_pos[0, 2].item()
+
+
 def physics_steps(env, n: int) -> None:
     """Advance physics n env-steps WITHOUT env.step(): no terminations, so a leg that counts
     as assembled is not reset out from under the experiment (which is what env.step does --
     success ends the episode, as upstream's done flag does)."""
-    render = not args.headless
+    render = not args.headless or recorder is not None
     for _ in range(n * env.cfg.decimation):
         env.sim.step(render=render)
         env.scene.update(env.physics_dt)
+        if recorder is not None:
+            recorder.frame()
 
 
 def assembled_now(env) -> torch.Tensor:
@@ -88,6 +161,9 @@ def _watch(env, leg, top, seated_pos, steps: int, zero: torch.Tensor, label: str
     for _ in range(120):
         env.sim.render()  # ~2 s at 60 fps, physics frozen: this is the pose as placed
     for i in range(steps):
+        if recorder is not None:
+            tw, up, rz = measured_twist(env, top, leg)
+            recorder.caption = f"placed twist {label}\nmeasured    {tw:6.1f} deg\nupright cos {up:.3f}  z {rz * 1000:5.1f} mm"
         physics_steps(env, 1)
         rel_pos, rel_quat = relative_pose(
             top.data.root_pos_w, top.data.root_quat_w, leg.data.root_pos_w, leg.data.root_quat_w
@@ -106,8 +182,15 @@ def main() -> None:
     cfg.furniture.log_resets = True  # say when and why an env resets
     if args.slow:
         cfg.sim.render_interval = 1  # a frame per physics step: 6x slower on screen
+    if args.out:
+        cfg.scene.clone_in_fabric = False
+        cfg.sim.render_interval = 1
+        install_recorder_camera(args.task, cfg, width=640, height=480)
     env = gym.make(args.task, cfg=cfg).unwrapped
     obs, _ = env.reset()
+    global recorder
+    if args.out:
+        recorder = Recorder(env)
     print(f"[smoke] task {args.task}: {env.num_envs} envs, mesh frame {cfg.furniture.mesh_frame}")
     print(f"[smoke] obs policy {tuple(obs['policy'].shape)}  action {env.action_manager.total_action_dim}")
 
@@ -144,6 +227,12 @@ def main() -> None:
             leg.write_root_velocity_to_sim(zero_vel)
             print(f"[smoke] drop: leg released {args.drop * 1000:.0f} mm above the seat, upright, twist 0")
             for i in range(args.settle):
+                if recorder is not None:
+                    tw, up, rz = measured_twist(env, top, leg)
+                    recorder.caption = (
+                        f"drop from {args.drop * 1000:.0f} mm, placed twist 0.0 deg\nmeasured    {tw:6.1f} deg\n"
+                        f"upright cos {up:.3f}  above seat {(rz - rel[2]) * 1000:5.1f} mm"
+                    )
                 physics_steps(env, 1)
                 if i % 10 == 0 or i == args.settle - 1:
                     rel_pos, rel_quat = relative_pose(
@@ -158,6 +247,8 @@ def main() -> None:
                     )
             print("[smoke] read: reaches ~0 mm without turning = the fit is loose (no screwing needed);")
             print("[smoke]       stops a few mm up, or turns as it sinks = the thread is doing its job.")
+            if recorder is not None:
+                recorder.close()
             env.close()
             return
         results = []
@@ -173,8 +264,17 @@ def main() -> None:
             seated_quat = quat_mul(top_quat, quat_from_euler_xyz(z, z, yaw))
             leg.write_root_pose_to_sim(torch.cat([seated_pos, seated_quat], dim=-1))
             leg.write_root_velocity_to_sim(zero_vel)
+            placed = yaw_deg
             _watch(env, leg, top, seated_pos, min(10, args.settle), zero, f"yaw {yaw_deg:.0f}")
-            physics_steps(env, args.settle - (min(10, args.settle) if args.slow else 0))
+            remaining = args.settle - (min(10, args.settle) if args.slow else 0)
+            for _ in range(remaining):
+                if recorder is not None:
+                    tw, up, rz = measured_twist(env, top, leg)
+                    recorder.caption = (
+                        f"placed twist {placed:6.1f} deg\nmeasured    {tw:6.1f} deg\n"
+                        f"upright cos {up:.3f}  z {rz * 1000:5.1f} mm"
+                    )
+                physics_steps(env, 1)
             now = assembled_now(env)
             drift = (leg.data.root_pos_w - seated_pos).norm(dim=-1)
             # where the leg ended up in the top's frame: the yaw it settled to (the thread
@@ -197,6 +297,8 @@ def main() -> None:
         print("[smoke]       assembled True = upstream's rule (all axes within ~20 deg, position")
         print("[smoke]       within tolerance) accepts it. In the real env success ends the episode.")
 
+    if recorder is not None:
+        recorder.close()
     env.close()
 
 

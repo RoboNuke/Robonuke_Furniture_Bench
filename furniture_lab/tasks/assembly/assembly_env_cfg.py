@@ -78,7 +78,8 @@ class AssemblySceneCfg(InteractiveSceneCfg):
     ground = assets.ground_cfg()
     light = assets.light_cfg()
 
-    table = assets.fixture_cfg("Table", frames.TABLE_SIZE, frames.TABLE_POS, TABLE_FRICTION)
+    # a mid grey, so the white parts read against it
+    table = assets.fixture_cfg("Table", frames.TABLE_SIZE, frames.TABLE_POS, TABLE_FRICTION, color=(0.35, 0.35, 0.35))
     obstacle_front = assets.fixture_cfg(
         "ObstacleFront", frames.OBSTACLE_FRONT_SIZE, frames.OBSTACLE_FRONT_POS, color=(0.3, 0.3, 0.3)
     )
