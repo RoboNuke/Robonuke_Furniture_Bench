@@ -39,7 +39,14 @@ upstream and what is this port's choice.
    FurnitureBench's OBJs with SDF collision if ever needed; such a file is in the OBJ frame,
    so its catalog row would say `frame="obj"`.
 
-3. Run (from the repo root, with the Isaac Lab env active):
+3. Run (from the repo root, with the Isaac Lab env active). First the smoke test, which needs
+   no trained run and checks the asset frames by seating a leg:
+
+   ```bash
+   python scripts/smoke.py --headless --teleport
+   ```
+
+   then the package's entry points:
 
    ```bash
    python scripts/train.py --config configs/experiments/one_leg_ppo.yaml --headless
