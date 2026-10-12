@@ -111,6 +111,9 @@ class FurnitureCfg:
     mesh_frame: str = mesh_frame()
     assembled_pos_threshold: Tuple[float, float, float] = ASSEMBLED_POS_THRESHOLD
     ori_bound: float = ORI_BOUND
+    #: print a line on every reset (which envs, after how many steps, which termination
+    #: fired). For watching; off for training, where it would print every step.
+    log_resets: bool = False
 
 
 @configclass

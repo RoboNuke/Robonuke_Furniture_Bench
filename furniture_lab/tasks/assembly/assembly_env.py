@@ -31,7 +31,24 @@ class AssemblyEnv(ManagerBasedRLEnv):
         if self._episode_success is not None and len(env_ids) > 0:
             # all pairs assembled at the moment the episode ended, upstream's success
             self._episode_success[env_ids] = tracker(self).all_assembled()[env_ids].float()
+            if self.cfg.furniture.log_resets:
+                self._log_reset(env_ids)
         super()._reset_idx(env_ids)
+
+    def _log_reset(self, env_ids: Sequence[int]) -> None:
+        """One line per reset: which envs, after how many steps, and which termination fired."""
+        ids = torch.as_tensor(env_ids, device=self.device)
+        causes = []
+        for name in self.termination_manager.active_terms:
+            fired = self.termination_manager.get_term(name)[ids]
+            if fired.any():
+                causes.append(f"{name}x{int(fired.sum())}")
+        steps = self.episode_length_buf[ids]
+        print(
+            f"[reset] step {self.common_step_counter}: envs {ids.tolist()} after "
+            f"{steps.min().item()}-{steps.max().item()} steps, cause {' '.join(causes) or 'external reset()'}",
+            flush=True,
+        )
 
     def step(self, action: torch.Tensor):
         obs, rew, terminated, truncated, extras = super().step(action)

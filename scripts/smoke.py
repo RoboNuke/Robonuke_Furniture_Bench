@@ -103,6 +103,7 @@ def _watch(env, leg, top, seated_pos, steps: int, zero: torch.Tensor, label: str
 def main() -> None:
     cfg = load_cfg_from_registry(args.task, "env_cfg_entry_point")
     cfg.scene.num_envs = args.num_envs
+    cfg.furniture.log_resets = True  # say when and why an env resets
     if args.slow:
         cfg.sim.render_interval = 1  # a frame per physics step: 6x slower on screen
     env = gym.make(args.task, cfg=cfg).unwrapped
