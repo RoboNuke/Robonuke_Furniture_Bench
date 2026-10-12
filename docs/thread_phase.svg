@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="520" viewBox="0 0 860 520" font-family="Helvetica, Arial, sans-serif" font-size="14">
+  <rect width="860" height="520" fill="#ffffff"/>
+  <text x="430" y="28" text-anchor="middle" font-size="18" font-weight="bold">The thread, unrolled: twist about the bolt axis vs. height of the bolt</text>
+  <text x="430" y="48" text-anchor="middle" fill="#555">A helix is a ramp. Pitch 9 mm per turn: every 40° of twist = 1 mm of height.</text>
+
+  <!-- axes -->
+  <line x1="90" y1="440" x2="800" y2="440" stroke="#000" stroke-width="1.5"/>
+  <line x1="90" y1="440" x2="90" y2="90" stroke="#000" stroke-width="1.5"/>
+  <text x="445" y="480" text-anchor="middle">twist of the leg about the bolt axis (deg)</text>
+  <text x="40" y="265" text-anchor="middle" transform="rotate(-90 40 265)">height of the leg (mm above the seat)</text>
+  <!-- x ticks: 0..360 -> 90..810 (2 px/deg) -->
+  <g fill="#000" text-anchor="middle">
+    <text x="90" y="458">0</text><text x="150" y="458">30</text><text x="210" y="458">60</text><text x="270" y="458">90</text>
+    <text x="330" y="458">120</text><text x="390" y="458">150</text><text x="450" y="458">180</text><text x="510" y="458">210</text>
+    <text x="570" y="458">240</text><text x="630" y="458">270</text><text x="690" y="458">300</text><text x="750" y="458">330</text><text x="810" y="458">360</text>
+  </g>
+  <!-- y ticks: 0 at y=400 ... 30 px/mm -->
+  <g fill="#000" text-anchor="end">
+    <text x="82" y="404">0</text><text x="82" y="344">2</text><text x="82" y="284">4</text><text x="82" y="224">6</text><text x="82" y="164">8</text><text x="82" y="104">10</text>
+  </g>
+
+  <!-- the hole's thread groove: a band between two flanks, both sloping 1 mm / 40 deg (= 0.75 px/px -> slope: 30px per 80px) -->
+  <!-- lower flank (the hole's crest below): passes through (26 deg, 0 mm) => x=142, y=400 ; slope: y decreases 30 px per 80 px of x -->
+  <!-- draw as a polygon band of width ~4.5 mm (135 px) -->
+  <polygon points="90,419.5 810,149.5 810,14.5 90,284.5" fill="#dfe9f7" stroke="none"/>
+  <!-- also show the next turn's groove wrapping (below) lightly -->
+  <polygon points="90,554.5 810,284.5 810,149.5 90,419.5" fill="#dfe9f7" fill-opacity="0.55" stroke="none"/>
+  <line x1="90" y1="419.5" x2="810" y2="149.5" stroke="#2f5fa8" stroke-width="2.5"/>
+  <line x1="90" y1="284.5" x2="810" y2="14.5" stroke="#2f5fa8" stroke-width="2.5"/>
+  <text x="560" y="225" fill="#2f5fa8" font-weight="bold">hole's groove (clearance)</text>
+  <text x="560" y="243" fill="#2f5fa8">the bolt's crest must stay inside this band</text>
+  <text x="300" y="396" fill="#2f5fa8">hole's crest below: solid</text>
+  <text x="640" y="110" fill="#2f5fa8">hole's crest above: solid</text>
+
+  <!-- the seat: height 0 line -->
+  <line x1="90" y1="400" x2="810" y2="400" stroke="#333" stroke-width="1" stroke-dasharray="6 4"/>
+  <text x="815" y="404" fill="#333">seat (fully screwed)</text>
+
+  <!-- where the lower flank crosses the seat: 26 deg -> x = 90+52 = 142 -->
+  <circle cx="142" cy="400" r="6" fill="#d9534f"/>
+  <text x="150" y="376" fill="#d9534f" font-weight="bold">26°: the stop — crest meets crest</text>
+
+  <!-- placed at 0 deg at seat height: interpenetration, pushed to 26 -->
+  <circle cx="90" cy="400" r="6" fill="#d9534f" fill-opacity="0.35" stroke="#d9534f" stroke-width="2"/>
+  <path d="M 96 400 L 134 400" stroke="#d9534f" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="96" y="430" fill="#d9534f">placed at 0° … 25°: inside the solid → pushed to 26°</text>
+
+  <!-- placed at 30..50 at seat height: inside the groove, stays -->
+  <circle cx="150" cy="400" r="5" fill="#2e8b57"/>
+  <circle cx="170" cy="400" r="5" fill="#2e8b57"/>
+  <circle cx="190" cy="400" r="5" fill="#2e8b57"/>
+  <text x="200" y="420" fill="#2e8b57" font-weight="bold">placed at 30° … 180°: in the groove → stays where put</text>
+
+  <!-- 180 deg at seat height: 4.5 mm out of phase: above the band -> clash with the crest above -->
+  <circle cx="490" cy="400" r="6" fill="#d9534f" fill-opacity="0.35" stroke="#d9534f" stroke-width="2"/>
+  <text x="500" y="420" fill="#d9534f">~200°+: crest hits the flank above → jiggle / ejection</text>
+
+  <!-- the identity orientation marker -->
+  <line x1="90" y1="400" x2="90" y2="90" stroke="#999" stroke-dasharray="3 3"/>
+  <text x="96" y="104" fill="#777">0° = "identity" (FurnitureBench's assembled orientation)</text>
+
+  <!-- how a real screw-in moves: along the ramp -->
+  <path d="M 400 160 L 160 393" stroke="#2e8b57" stroke-width="3" stroke-dasharray="8 5" marker-end="url(#arrowg)"/>
+  <text x="330" y="150" fill="#2e8b57" font-weight="bold">screwing in: the leg rides the ramp down to the seat</text>
+
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#d9534f"/>
+    </marker>
+    <marker id="arrowg" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2e8b57"/>
+    </marker>
+  </defs>
+</svg>
