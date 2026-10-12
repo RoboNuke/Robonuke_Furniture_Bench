@@ -70,12 +70,12 @@ import torch  # noqa: E402
 from isaaclab.utils.math import quat_apply, quat_from_euler_xyz, quat_mul  # noqa: E402
 from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry  # noqa: E402
 
-from robonuke_rl_core.recording import (  # noqa: E402
-    VideoWriter,
-    install_recorder_camera,
-    read_camera_rgb,
-    recorder_camera,
-)
+from isaaclab.sensors import TiledCameraCfg  # noqa: E402
+from isaaclab.sim.spawners.sensors import PinholeCameraCfg  # noqa: E402
+
+from robonuke_rl_core.recording import VideoWriter, read_camera_rgb  # noqa: E402
+
+CAMERA_KEY = "recorder_cam"
 
 import furniture_lab.tasks  # noqa: E402, F401
 from furniture_lab.tasks.assembly.mdp.state import parts_pose_w, tracker  # noqa: E402
@@ -89,7 +89,7 @@ class Recorder:
 
     def __init__(self, env) -> None:
         self.env = env
-        self.camera = recorder_camera(env)
+        self.camera = env.scene[CAMERA_KEY]
         eye = torch.tensor([[float(v) for v in args.cam.split(",")]], device=env.device)
         look = torch.tensor([[float(v) for v in args.look.split(",")]], device=env.device)
         origins = env.scene.env_origins[:1]
@@ -183,9 +183,23 @@ def main() -> None:
     if args.slow:
         cfg.sim.render_interval = 1  # a frame per physics step: 6x slower on screen
     if args.out:
+        # a manager-based env takes a camera as a scene entry (the package's
+        # install_recorder_camera patches a Direct env's _setup_scene, which this env has not)
         cfg.scene.clone_in_fabric = False
         cfg.sim.render_interval = 1
-        install_recorder_camera(args.task, cfg, width=640, height=480)
+        setattr(
+            cfg.scene,
+            CAMERA_KEY,
+            TiledCameraCfg(
+                prim_path="{ENV_REGEX_NS}/" + CAMERA_KEY,
+                data_types=["rgb"],
+                spawn=PinholeCameraCfg(
+                    focal_length=24.0, focus_distance=0.5, horizontal_aperture=20.955, clipping_range=(0.05, 20.0)
+                ),
+                width=640,
+                height=480,
+            ),
+        )
     env = gym.make(args.task, cfg=cfg).unwrapped
     obs, _ = env.reset()
     global recorder
