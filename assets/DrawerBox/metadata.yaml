@@ -1,0 +1,9 @@
+assembled_offset:
+  pos: [0.0, 0.017437, -0.037283]
+  quat: [1.0, 0.0, 0.0, 0.0]
+bottom_offset:
+  pos: [0.0, 0.0, -0.058871]
+  quat: [1.0, 0.0, 0.0, 0.0]
+success_thresholds:
+  position: 0.005
+  orientation: 0.025
