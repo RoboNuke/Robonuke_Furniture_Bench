@@ -34,6 +34,11 @@ parser.add_argument(
     help="yaw angles (deg) about the screw axis to try; the thread phase is unknown",
 )
 parser.add_argument("--settle", type=int, default=20, help="steps after the teleport before measuring")
+parser.add_argument(
+    "--drop", type=float, default=None, metavar="HEIGHT",
+    help="instead of seating: hold the leg aligned HEIGHT m above the seat and release it. Does it "
+    "fall to the seat without turning (loose fit, peg-in-hole) or stop on the thread (a real screw)?",
+)
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 app = AppLauncher(args).app
@@ -80,6 +85,32 @@ def main() -> None:
         rel_t = torch.tensor(rel, dtype=torch.float32, device=env.device).expand(env.num_envs, -1)
         print(f"[smoke] seat ({args.seat}) in the top's frame: {rel.round(5).tolist()}")
         zero_vel = torch.zeros(env.num_envs, 6, device=env.device)
+        if args.drop is not None:
+            env.reset()
+            for _ in range(5):
+                env.step(zero)
+            top_pos, top_quat = top.data.root_pos_w.clone(), top.data.root_quat_w.clone()
+            above = rel_t.clone()
+            above[:, 2] += args.drop
+            leg.write_root_pose_to_sim(torch.cat([top_pos + quat_apply(top_quat, above), top_quat], dim=-1))
+            leg.write_root_velocity_to_sim(zero_vel)
+            print(f"[smoke] drop: leg released {args.drop * 1000:.0f} mm above the seat, upright, twist 0")
+            for i in range(args.settle):
+                env.step(zero)
+                if i % 10 == 0 or i == args.settle - 1:
+                    rel_pos, rel_quat = relative_pose(
+                        top.data.root_pos_w, top.data.root_quat_w, leg.data.root_pos_w, leg.data.root_quat_w
+                    )
+                    w, x, y, zq = rel_quat.unbind(-1)
+                    yaw_now = torch.rad2deg(torch.atan2(2 * (w * zq + x * y), 1 - 2 * (y * y + zq * zq)))
+                    print(
+                        f"[smoke] drop step {i:4d}: height above seat {(rel_pos[:, 2] - rel_t[:, 2]).mean().item() * 1000:7.2f} mm  "
+                        f"twist {yaw_now.mean().item():7.1f} deg  upright cos {rotation_diag(rel_quat)[:, 2].mean().item():.3f}"
+                    )
+            print("[smoke] read: reaches ~0 mm without turning = the fit is loose (no screwing needed);")
+            print("[smoke]       stops a few mm up, or turns as it sinks = the thread is doing its job.")
+            env.close()
+            return
         results = []
         for yaw_deg in [float(v) for v in args.yaws.split(",")]:
             env.reset()
