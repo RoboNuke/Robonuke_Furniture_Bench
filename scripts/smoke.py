@@ -45,6 +45,7 @@ from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry  # noqa: E402
 
 import furniture_lab.tasks  # noqa: E402, F401
 from furniture_lab.tasks.assembly.mdp.state import parts_pose_w, tracker  # noqa: E402
+from furniture_lab.tasks.furniture.assembly import relative_pose, rotation_diag  # noqa: E402
 from furniture_lab.tasks.furniture import catalog  # noqa: E402
 from furniture_lab.tasks.furniture.square_table import rel_pose_targets  # noqa: E402
 
@@ -96,16 +97,25 @@ def main() -> None:
                 env.step(zero)
             t = tracker(env)
             drift = (leg.data.root_pos_w - seated_pos).norm(dim=-1)
+            # where the leg ended up in the top's frame: the yaw it settled to (the thread
+            # phase, if it screwed itself in) and the axis cosines the assembled check reads
+            rel_pos, rel_quat = relative_pose(
+                top.data.root_pos_w, top.data.root_quat_w, leg.data.root_pos_w, leg.data.root_quat_w
+            )
+            w, x, y, zq = rel_quat.unbind(-1)
+            final_yaw = torch.rad2deg(torch.atan2(2 * (w * zq + x * y), 1 - 2 * (y * y + zq * zq)))
+            diag = rotation_diag(rel_quat)
             results.append((yaw_deg, drift.mean().item(), t.assembled[:, 0].float().mean().item()))
             print(
-                f"[smoke] yaw {yaw_deg:6.1f} deg: drift {drift.mean().item():.4f} m "
-                f"(max {drift.max().item():.4f})  assembled {t.assembled[:, 0].tolist()}"
+                f"[smoke] yaw {yaw_deg:6.1f} -> {final_yaw.mean().item():7.1f} deg  drift {drift.mean().item():.4f} m "
+                f"(max {drift.max().item():.4f})  rel z {rel_pos[:, 2].mean().item():.4f}  "
+                f"axis cos {[f'{v:.3f}' for v in diag.mean(0).tolist()]}  assembled {t.assembled[:, 0].tolist()}"
             )
         best = min(results, key=lambda r: r[1])
         print(f"[smoke] least drift at yaw {best[0]:.1f} deg: {best[1]:.4f} m, assembled rate {best[2]:.2f}")
-        print("[smoke] read: drift < ~2 mm at some yaw = the thread seats at that phase;")
-        print("[smoke]       large drift at every yaw = the seat height or the frame is wrong;")
-        print("[smoke]       seats but 'assembled' False = the check's orientation/position numbers.")
+        print("[smoke] read: seated runs that converge to one final yaw = the thread's phase;")
+        print("[smoke]       axis cos z ~1 with x/y < 0.94 = seated but turned, so the check's")
+        print("[smoke]       orientation rule (all three axes) is what rejects it.")
 
     env.close()
 
