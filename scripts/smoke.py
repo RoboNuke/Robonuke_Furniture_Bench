@@ -41,6 +41,19 @@ parser.add_argument(
 )
 parser.add_argument("--settle", type=int, default=20, help="steps after the teleport before measuring")
 parser.add_argument(
+    "--contact_offset", type=float, default=None,
+    help="override the parts' PhysX contact offset (m; the env uses 0.002). Does the thread's stop "
+    "angle move with it? Then the offset is inflating the thread.",
+)
+parser.add_argument(
+    "--rest_offset", type=float, default=None, help="override the parts' rest offset (m; the env uses 0.0)"
+)
+parser.add_argument(
+    "--seat_dz", type=float, default=0.0,
+    help="shift the seat height by this much (m), e.g. -0.0005. Through the 9 mm pitch, 0.25 mm "
+    "of height is 10 deg of stop angle.",
+)
+parser.add_argument(
     "--out", type=str, default=None, metavar="FILE.mp4",
     help="record the experiments to an mp4 (works headless): one frame per physics step, with the "
     "placed and measured twist in the bottom-right corner. Needs the package's recorder camera, "
@@ -180,6 +193,14 @@ def main() -> None:
     cfg = load_cfg_from_registry(args.task, "env_cfg_entry_point")
     cfg.scene.num_envs = args.num_envs
     cfg.furniture.log_resets = True  # say when and why an env resets
+    if args.contact_offset is not None or args.rest_offset is not None:
+        for name in cfg.furniture.part_names:
+            props = getattr(cfg.scene, name).spawn.collision_props
+            if args.contact_offset is not None:
+                props.contact_offset = args.contact_offset
+            if args.rest_offset is not None:
+                props.rest_offset = args.rest_offset
+        print(f"[smoke] parts contact_offset={props.contact_offset} rest_offset={props.rest_offset}")
     if args.slow:
         cfg.sim.render_interval = 1  # a frame per physics step: 6x slower on screen
     if args.out:
@@ -227,6 +248,7 @@ def main() -> None:
             meta_top = catalog.metadata(names[0])["assembled_offset"]["pos"]
             meta_leg = catalog.metadata(names[4])["assembled_offset"]["pos"]
             rel[2] = meta_top[2] - meta_leg[2]
+        rel[2] += args.seat_dz
         rel_t = torch.tensor(rel, dtype=torch.float32, device=env.device).expand(env.num_envs, -1)
         print(f"[smoke] seat ({args.seat}) in the top's frame: {rel.round(5).tolist()}")
         zero_vel = torch.zeros(env.num_envs, 6, device=env.device)
