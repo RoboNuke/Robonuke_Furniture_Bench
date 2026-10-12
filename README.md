@@ -1,1 +1,103 @@
-# Robonuke_Furniture_Bench
+# robonuke_furniture
+
+FurnitureBench's square-table assembly (`one_leg`, `square_table`) as a **manager-based
+Isaac Lab env**, as a project on [robonuke_rl_core](https://github.com/RoboNuke/robonuke_rl_core)
+(made from `robonuke_project_template`: same layout, same entry scripts).
+
+| piece | where |
+| --- | --- |
+| FurnitureBench's numbers: frames, part reset poses, assembled poses, tolerances | `furniture_lab/tasks/furniture/{frames,square_table}.py` (numpy, tested) |
+| the assembled check, batched in torch, and the per-episode latch | `furniture_lab/tasks/furniture/assembly.py` (tested against upstream's logic) |
+| Isaac Lab asset configs (parts, fixtures, the effort-controlled Panda) | `furniture_lab/tasks/furniture/assets.py` |
+| the env cfg: scene, OSC action, observations, events, reward, terminations | `furniture_lab/tasks/assembly/assembly_env_cfg.py` |
+| the env class (publishes `episode/success` for the package) | `furniture_lab/tasks/assembly/assembly_env.py` |
+| the MDP terms | `furniture_lab/tasks/assembly/mdp/` |
+| task registration: `Isaac-Furniture-OneLeg-v0`, `Isaac-Furniture-SquareTable-v0` | `furniture_lab/tasks/__init__.py` |
+| OBJ -> USD (SDF collision) and USD inspection | `tools/convert_assets.py`, `tools/check_usd.py` |
+
+The docstring at the top of `assembly_env_cfg.py` lists, item by item, what is copied from
+upstream and what is this port's choice.
+
+## Setup
+
+1. The package, installed once into the Isaac Lab env (Isaac Lab 0.47.1 / Isaac Sim 5.1 /
+   Python 3.11 -- **not** the Python 3.8 Isaac Gym env):
+
+   ```bash
+   pip install -e ~/robonuke_rl_core
+   ```
+
+2. Part USDs, one of two ways, into a folder `FURNITURE_ASSETS_DIR` points at:
+
+   * **UWLab's files** (`square_leg.usd`, `square_table_top.usd` from the `UW-Lab/uwlab-assets`
+     dataset, `Props/FurnitureBench/`): both keep the thread as SDF collision, but their mesh
+     frames are rotated relative to FurnitureBench's OBJs (leg axis / top thickness along
+     `z` instead of `y`), so also set
+
+     ```bash
+     export FURNITURE_ASSETS_DIR=~/furniture_assets   # the two .usd files, directly in it
+     export FURNITURE_MESH_FRAME=uwlab
+     ```
+
+     The rotation *about* that axis cannot be read off the files; the port assumes both
+     parts were rotated the same way (`square_table.MESH_FRAMES`). Check it in the sim by
+     teleporting a leg to its assembled pose before trusting a training run.
+
+   * **A straight conversion** of the OBJs with SDF collision (`FURNITURE_MESH_FRAME=obj`,
+     the default):
+
+     ```bash
+     FURNITURE_BENCH=~/IsaacGym_Preview_4_Package/furniture-bench \
+         python tools/convert_assets.py --out ~/furniture_assets --headless
+     export FURNITURE_ASSETS_DIR=~/furniture_assets
+     ```
+
+   `python tools/check_usd.py <file.usd>` shows what a file holds (needs `pxr`:
+   `pip install usd-core`). The `.usd` files inside furniture-bench itself are visual-only.
+
+3. Run (from the repo root, with the Isaac Lab env active):
+
+   ```bash
+   python scripts/train.py --config configs/experiments/one_leg_ppo.yaml --headless
+   python scripts/debug.py --run hur/furniture_bench/<run> --resets --hold_seconds 2
+   python scripts/eval.py --run hur/furniture_bench/<run> --eval_config configs/eval/quick.yaml --headless
+   ```
+
+## What the env is
+
+* **Scene**, in the robot-base frame (origin at the Panda's base, z up): FurnitureBench's
+  table surface at z = -0.015, the three obstacle boxes, and the five square-table parts at
+  upstream's from-scratch reset poses. The AprilTag-frame numbers upstream uses are kept
+  verbatim and transformed once (`frames.tag_to_world`).
+* **Physics**: upstream's PhysX settings; 1/120 s steps, 6 per action (upstream's sim runs
+  the policy at 20 Hz, not the 10 Hz its config says -- see the cfg docstring).
+* **Action** (7-D): EE delta pose through Isaac Lab's operational-space controller with
+  upstream's gains (`kp = [90, 90, 90, 70, 60, 80]`, critically damped, nullspace to the
+  reset joints), scaled 2.5 cm / 0.1 rad per unit action (this port's scale), plus a binary
+  gripper (`< 0` closes).
+* **Observation** (56-D): EE position, quaternion (wxyz), 6-D velocity, gripper width, the
+  five parts' poses (7 each, robot-base frame), and the previous action.
+* **Reward**: upstream's sparse +1 per newly assembled pair, once per episode. No shaping.
+* **Done**: success (every pair assembled), `episode_length_s` (30 s by default), or a part
+  fallen off the table (added here).
+* **Reset**: upstream's `low` randomization (+-1.5 cm, +-15 deg, collision-free);
+  `configs/experiments/one_leg_medium.yaml` sets `medium`.
+
+`task.cfg.*` overrides reach every field of the env cfg, as in any project on the package.
+
+## Not covered
+
+* The package's Forge-family wrappers (hybrid force/position controller, fragile object,
+  efficient reset, contact flags, task metrics) key on a `Forge` task name and do not apply
+  here. A hybrid action space for this env would be a custom action term in `mdp/`.
+* The `6d_rot_mat` orientation wrapper likewise; `ee_quat` is published as a quaternion.
+* Camera observations, upstream's `high` randomization table, and the other furniture.
+* **Nothing here has run in Isaac Sim yet.** The geometry and the assembled check are tested
+  on CPU (`pytest`, 29 tests, incl. a wiring check of the env cfg against stubbed Isaac Lab
+  modules); the first run will be the test of the rest.
+
+## Tests
+
+```bash
+python -m pytest          # CPU: geometry, assembled check vs upstream, cfg wiring
+```

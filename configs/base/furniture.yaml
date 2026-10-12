@@ -1,0 +1,23 @@
+# Base config every FurnitureBench experiment in this project shares. The env's own defaults
+# (dt, decimation, gains, randomization) live in furniture_lab/tasks/assembly/assembly_env_cfg.py;
+# override any of them under task.cfg.* (e.g. task.cfg.episode_length_s=60).
+base: hpc.yaml
+
+task:
+  name: Isaac-Furniture-OneLeg-v0
+
+wandb:
+  entity: hur
+  project: furniture_bench
+
+trainer:
+  learner: ppo
+  total_timesteps: 2000000
+  write_interval: 1000
+  checkpoint_interval: 50000
+
+# none of the package's Forge-family wrappers apply to a manager-based env; task_metrics
+# is on by default and skips itself for a non-Forge task name
+wrappers:
+  task_metrics:
+    enabled: false

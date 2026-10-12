@@ -1,0 +1,13 @@
+# The same, at FurnitureBench's "medium" randomness: +-5 cm, +-45 deg part perturbation.
+base: one_leg_ppo.yaml
+
+wandb:
+  group: one_leg_ppo_medium
+
+task:
+  cfg:
+    events:
+      reset_parts:
+        params:
+          pos_range: 0.05
+          yaw_range_deg: 45.0

@@ -1,0 +1,20 @@
+# Cluster settings for the HPC launchers (`launchers/*.py`). `configs/base/furniture.yaml`
+# chains onto this file, so every experiment inherits these and overrides only what differs
+# (hpc.time, hpc.mem), with a one-off on the CLI (hpc.time=2-00:00:00). The full field list
+# is the `hpc` section of the package README.
+#
+# WANDB_API_KEY is an environment variable, never a field here. The launcher passes
+# `sbatch --export=ALL`, which carries it from your login shell into the job.
+hpc:
+  account: virl-grp
+  # the verified list: no `gpu` (AllowAccounts excludes virl-grp) and no `dgx2` (sm_70, no
+  # cu128 kernels)
+  partitions: dgxh,tiamat,eecs2
+
+  # The existing Isaac image, reused as-is. Nothing is installed into it: the job binds the
+  # package and project clones at their own paths and puts them on PYTHONPATH.
+  sif_image: ~/hpc-share/isaac/ghvic.sif
+
+  # Bound as the container HOME: Kit and shader caches land here and run to GBs, so it must
+  # be scratch, never a quota'd NFS home.
+  cache_home: ~/hpc-share/isaac_cache_home

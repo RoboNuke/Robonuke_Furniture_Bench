@@ -1,0 +1,22 @@
+# PPO on one_leg, low randomness, sparse reward -- the task as FurnitureBench defines it.
+#   python scripts/train.py --config configs/experiments/one_leg_ppo.yaml --headless
+base: ../base/furniture.yaml
+
+experiment:
+  num_agents: 1
+  seed: 1
+
+wandb:
+  group: one_leg_ppo
+
+task:
+  cfg:
+    scene:
+      num_envs: 256
+
+ppo:
+  rollouts: 32
+  learning_epochs: 5
+  mini_batches: 4
+  entropy_loss_scale: 0.001
+  # time_out is a truncation here (an ordinary manager-based env), so no bootstrap flag

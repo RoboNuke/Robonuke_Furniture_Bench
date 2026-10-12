@@ -1,0 +1,11 @@
+# A small eval: 8 fresh-condition episodes on 4 envs, deterministic actions.
+#   python scripts/eval.py --run hur/furniture_bench/<run> --eval_config configs/eval/quick.yaml
+base: ../base/hpc.yaml
+
+eval:
+  num_rollouts: 8
+
+task:
+  cfg:
+    scene:
+      num_envs: 4
