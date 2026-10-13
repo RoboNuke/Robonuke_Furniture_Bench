@@ -40,6 +40,8 @@ parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--no_noise", action="store_true", help="disable upstream's target/action noise")
 parser.add_argument("--rot_speed", type=float, default=90.0, help="deg/s of wrist rotation while screwing (calibrated: 90)")
 parser.add_argument("--wind_speed", type=float, default=180.0, help="deg/s of wrist rotation while winding the open hand back")
+parser.add_argument("--insert_lift", type=float, default=0.0, help="m to raise the hold pose above where the leg stopped before opening (0.003 = 3 mm, no press)")
+parser.add_argument("--insert_rate", type=float, default=0.002, help="m per step the held leg is lowered until it stops (also the press while lowering)")
 parser.add_argument("--screw_press", type=float, default=0.005, help="m pressed on the thread per step while screwing (upstream 0.005)")
 parser.add_argument("--timeout", type=int, default=600, help="upstream's scripted_timeout for one_leg")
 parser.add_argument("--save_failure", action="store_true", help="keep failed attempts (pkl + video) under fails/")
@@ -287,6 +289,8 @@ def main() -> None:
         policy = sp.OneLegScriptedPolicy(seed=args.seed + attempt - 1, noise=not args.no_noise)
         policy.leg.yaw_step_deg = args.rot_speed * env.step_dt
         policy.leg.wind_step_deg = args.wind_speed * env.step_dt
+        policy.leg.insert_lift = args.insert_lift
+        policy.leg.insert_rate = args.insert_rate
         policy.leg.screw_press = args.screw_press
         obs_list, acts, rews, skills = [], [], [], []
         assembled_step = None

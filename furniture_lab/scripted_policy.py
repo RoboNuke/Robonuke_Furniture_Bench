@@ -355,6 +355,9 @@ class SquareTableLegPart(_Part):
         self.insert_contact_eps = 0.0005  # m over insert_contact_steps steps = stopped
         self.insert_contact_steps = 3
         self.insert_min_above_seat = 0.003  # never command below this
+        #: once the leg has stopped, the hold pose before release is raised by this much, so
+        #: the fingers open with no press on the thread (0 = hold exactly where it stopped)
+        self.insert_lift = 0.0
         self._leg_z_hist: list = []
         self._state = "reach_leg_floor_xy"
 
@@ -541,6 +544,7 @@ class SquareTableLegPart(_Part):
             stopped = len(h) > self.insert_contact_steps and (h[-1 - self.insert_contact_steps] - h[-1]) < self.insert_contact_eps
             if stopped or leg_z <= seat_z + self.insert_min_above_seat + 1e-4 or self.curr_cnt - self.prev_cnt >= 40:
                 self.prev_pose = hom(ee_pose[:3, :3].copy(), ee_pose[:3, 3].copy())  # hold where it stopped
+                self.prev_pose[2, 3] += self.insert_lift  # ... or a touch above it
                 next_state = "insert_settle"
         elif self._state == "insert_settle":
             target = self.prev_pose
