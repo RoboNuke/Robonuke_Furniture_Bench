@@ -18,8 +18,8 @@ upstream's ``scripted_timeout`` of 600 steps (failure). With ``--record`` every 
 filmed: a success keeps its video beside its pkl, a failure keeps it under ``fails/`` only
 with ``--save_failure``.
 
-To end a rollout early as a failure: ``X`` in the viewport window (click it first so it has
-focus) or ``f`` + Enter in the terminal; ``Escape`` in the viewport or ``q`` + Enter in the
+To end a rollout early as a failure: ``K`` in the viewport window (click it first so it has
+focus) or ``k`` + Enter in the terminal; ``L`` in the viewport or ``l`` + Enter in the
 terminal stops collecting after the current attempt is filed.
 """
 
@@ -123,9 +123,9 @@ class Recorder:
 class AbortKeys:
     """End a rollout early (filed as a failure) or stop collecting.
 
-    Two routes: in the viewport window (click it first), ``X`` aborts and ``Escape`` stops after
-    the current attempt -- keys Kit leaves unbound (``F`` is "frame selection", which flies the
-    camera into the table, ``Q`` the select tool); or in the terminal, type ``f`` / ``q`` and
+    Two routes: in the viewport window (click it first), ``K`` aborts and ``L`` stops after the
+    current attempt -- keys Kit leaves unbound (``F`` is "frame selection", which flies the
+    camera into the table, ``Q`` the select tool); or in the terminal, type ``k`` / ``l`` and
     Enter. Headless only the terminal route exists."""
 
     def __init__(self) -> None:
@@ -142,30 +142,30 @@ class AbortKeys:
                 self._input = carb.input.acquire_input_interface()
                 self._press = carb.input.KeyboardEventType.KEY_PRESS
                 self._sub = self._input.subscribe_to_keyboard_events(keyboard, self._on_key)
-                print("[collect] viewport keys (click it first): X = abort rollout as a failure, Esc = stop after this attempt", flush=True)
+                print("[collect] viewport keys (click it first): K = abort rollout as a failure, L = stop after this attempt", flush=True)
             except Exception as e:  # no window, different carb API ...
                 print(f"[collect] viewport abort keys unavailable: {e}", flush=True)
         if sys.stdin is not None and sys.stdin.isatty():
             import threading
 
             threading.Thread(target=self._stdin_loop, daemon=True).start()
-            print("[collect] terminal keys: type f + Enter = abort rollout as a failure, q + Enter = stop after this attempt", flush=True)
+            print("[collect] terminal keys: type k + Enter = abort rollout as a failure, l + Enter = stop after this attempt", flush=True)
 
     def _on_key(self, event, *_args, **_kwargs) -> bool:
         if event.type == self._press:
             name = event.input.name
-            if name == "X":
+            if name == "K":
                 self.abort = True
-            elif name == "ESCAPE":
+            elif name == "L":
                 self.quit = True
         return True
 
     def _stdin_loop(self) -> None:
         for line in sys.stdin:
             cmd = line.strip().lower()
-            if cmd == "f":
+            if cmd == "k":
                 self.abort = True
-            elif cmd == "q":
+            elif cmd == "l":
                 self.quit = True
 
     def new_attempt(self) -> None:

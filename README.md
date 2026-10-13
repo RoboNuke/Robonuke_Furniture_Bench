@@ -90,7 +90,7 @@ python scripts/collect_scripted.py --headless --num_demos 1 --out_dir ~/fb_demos
 #   success -> ~/fb_demos/one_leg/<stamp>/{<stamp>.pkl, recording.mp4}; failure -> ~/fb_demos/one_leg/fails/fail<n>.{pkl,mp4}
 #   success = FurnitureBench's assembled rule holding 10 steps AND still true at the end, after the hand lifts;
 #   a part leaving upstream's position limits ends the attempt as a failure. To end a rollout early as a
-#   failure: X in the viewport (click it first) or f + Enter in the terminal; Esc / q + Enter stop collecting.
+#   failure: K in the viewport (click it first) or k + Enter in the terminal; L / l + Enter stop collecting.
 #   insertion knobs: --insert_height 0.077 --insert_press 0.003 --start_twist 90 (0 = upstream's sequence)
 
 python scripts/replay_demo.py --demo ~/fb_demos/one_leg/<d>/<d>.pkl --mode ee_track --headless --out ee_track.mp4
