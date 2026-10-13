@@ -37,6 +37,10 @@ parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.R
 parser.add_argument("--out_dir", type=str, default="fb_demos")
 parser.add_argument("--num_demos", type=int, default=1)
 parser.add_argument("--seed", type=int, default=0)
+parser.add_argument("--policy", choices=["servo", "scripted"], default="servo",
+                    help="servo: closes the loop on the held object (furniture_lab/servo_policy.py); scripted: upstream's hand-only state machine")
+parser.add_argument("--lead", type=float, default=10.0, help="servo: deg the hand leads the leg's own yaw while screwing")
+parser.add_argument("--pos_speed", type=float, default=0.16, help="servo: m/s cap on the held object's translation")
 parser.add_argument("--no_noise", action="store_true", help="disable upstream's target/action noise")
 parser.add_argument("--rot_speed", type=float, default=90.0, help="deg/s of wrist rotation while screwing (calibrated: 90)")
 parser.add_argument("--wind_speed", type=float, default=180.0, help="deg/s of wrist rotation while winding the open hand back")
@@ -75,6 +79,7 @@ from isaaclab.utils.math import (  # noqa: E402
 from robonuke_rl_core.recording import VideoWriter, read_camera_rgb  # noqa: E402
 
 from furniture_lab import scripted_policy as sp  # noqa: E402
+from furniture_lab import servo_policy as sv  # noqa: E402
 from furniture_lab.tasks.assembly.assembly_env import AssemblyEnv  # noqa: E402
 from furniture_lab.tasks.assembly.assembly_env_cfg import EE_OFFSET  # noqa: E402
 from furniture_lab.tasks.assembly.mdp.state import parts_pose_w, tracker  # noqa: E402
@@ -293,11 +298,23 @@ def main() -> None:
             env.step(zero)  # let the parts settle after the reset
         tmp_video = out_root / f".attempt{attempt}.mp4"
         recorder = Recorder(env, tmp_video) if args.record else None
-        policy = sp.OneLegScriptedPolicy(seed=args.seed + attempt - 1, noise=not args.no_noise)
-        policy.leg.yaw_step_deg = args.rot_speed * env.step_dt
-        policy.leg.wind_step_deg = args.wind_speed * env.step_dt
-        policy.leg.insert_lift = args.insert_lift
-        policy.leg.insert_rate = args.insert_rate
+        if args.policy == "servo":
+            policy = sv.ServoOneLegPolicy(
+                seed=args.seed + attempt - 1,
+                noise=not args.no_noise,
+                pos_step=args.pos_speed * env.step_dt,
+                rot_step_deg=args.rot_speed * env.step_dt,
+                lead_deg=args.lead,
+                press=args.screw_press,
+                insert_rate=args.insert_rate,
+                wind_step_deg=args.wind_speed * env.step_dt,
+            )
+        else:
+            policy = sp.OneLegScriptedPolicy(seed=args.seed + attempt - 1, noise=not args.no_noise)
+            policy.leg.yaw_step_deg = args.rot_speed * env.step_dt
+            policy.leg.wind_step_deg = args.wind_speed * env.step_dt
+            policy.leg.insert_lift = args.insert_lift
+            policy.leg.insert_rate = args.insert_rate
         policy.leg.screw_press = args.screw_press
         obs_list, acts, rews, skills = [], [], [], []
         assembled_step = None

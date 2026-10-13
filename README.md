@@ -92,9 +92,11 @@ python scripts/collect_scripted.py --headless --num_demos 1 --out_dir ~/fb_demos
 #   a part leaving upstream's position limits ends the attempt as a failure. Not headless, viewport focused:
 #   k = this rollout fails now, l = quit.
 #   --part_friction / --table_friction override FurnitureSim's 0.15 / 0.10
-#   screwing (this port): per grasp the open hand winds back to joint 7's -limit, lowers square onto the
-#   leg, centres it on the hole, then only the wrist turns (~300 deg) until joint 7 nears its +limit;
-#   --rot_speed (90 deg/s, calibrated with scripts/screw_calib.py), --wind_speed (180) and --screw_press (0.005 m) tune it
+#   --policy servo (default): closes the loop on the HELD object (furniture_lab/servo_policy.py) -- the top is
+#   slid to a corner pose, the leg is carried upright, lowered to contact, released, regrasped square with the
+#   wrist wound back, and screwed with the hand leading the leg's own yaw by <= --lead deg; free-hand phases
+#   are upstream's states. --policy scripted: upstream's hand-only state machine with this port's regrasp.
+#   --rot_speed (deg/s), --pos_speed (m/s), --lead, --screw_press, --insert_rate, --wind_speed tune the servo
 
 python scripts/replay_demo.py --demo ~/fb_demos/one_leg/<d>/<d>.pkl --mode ee_track --headless --out ee_track.mp4
 python scripts/replay_demo.py --demo ~/fb_demos/one_leg/<d>/<d>.pkl --mode actions  --headless --out actions.mp4
