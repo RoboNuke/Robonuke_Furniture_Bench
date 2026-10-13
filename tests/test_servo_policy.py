@@ -1,6 +1,7 @@
-"""The object-servo policy against an ideal kinematic world: the hand reaches its goal each
-step, a held part moves rigidly with it, the leg rides a helix once its bolt is in the hole
-(pitch 9 mm/turn, stop 9 mm above the seat), joint 7 follows the hand's yaw."""
+"""The object-servo policy against an ideal kinematic world: the hand closes a fixed
+fraction of its relative command each step (the OSC's ~20 %), a held part moves rigidly with
+it, the leg rides a helix once its bolt is in the hole (pitch 9 mm/turn, stop 9 mm above the
+seat), joint 7 follows the hand's yaw."""
 
 import numpy as np
 
@@ -10,6 +11,7 @@ from furniture_lab.tasks.furniture import frames, square_table as st
 
 PITCH = 0.009
 STOP = 0.009
+OSC_FRACTION = 0.2  # of a relative pose command, closed per step
 
 
 class IdealWorld:
@@ -47,7 +49,12 @@ class IdealWorld:
 
     def step(self, a: sp.ScriptedAction):
         old = self.ee.copy()
-        new = sp.hom(a.goal_rot, a.goal_pos)
+        # the controller: a fraction of the commanded delta (the action, not the goal)
+        pos = old[:3, 3] + OSC_FRACTION * a.delta_pos
+        dq = a.delta_quat  # in the EE frame
+        rv = sp.quat_to_axisangle(dq) if hasattr(sp, "quat_to_axisangle") else sv.mat_to_rotvec(sp.quat_to_mat(dq))
+        R = old[:3, :3] @ sv.rotvec_to_mat(OSC_FRACTION * rv)
+        new = sp.hom(R, pos)
         dyaw = (sv.yaw_of(new[:3, :3]) - sv.yaw_of(old[:3, :3]) + np.pi) % (2 * np.pi) - np.pi
         self.joints[6] = np.clip(self.joints[6] - dyaw, -2.8973, 2.8973)
         self.ee = new
@@ -123,7 +130,7 @@ def test_servo_policy_assembles_in_the_ideal_world():
 
 
 def test_object_servo_orbits_the_tcp_about_the_object():
-    servo = sv.ObjectServo(max_step_pos=0.01, max_step_rot_deg=5.0)
+    servo = sv.ObjectServo(kp_pos=1.0, kp_rot=1.0, max_cmd_pos=0.01, max_cmd_rot_deg=5.0)
     obj_pos, obj_R = np.array([0.5, 0.1, 0.05]), np.eye(3)
     ee_pos, ee_R = obj_pos + np.array([0.0, 0.08, 0.0]), sp.rot_mat((np.pi, 0, 0))
     # a pure yaw goal of +30 deg: the TCP must move on the circle around the object

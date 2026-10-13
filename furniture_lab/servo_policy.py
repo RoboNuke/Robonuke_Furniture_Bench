@@ -117,13 +117,18 @@ class ObjectServo:
     One step: ``dp = sat(kp_pos * (goal_pos - obj_pos))``, ``dR = exp(sat(kp_rot * log(goal_R
     obj_R^T)))``. The object is rigid in the fingers, so the hand must move with it: the TCP
     orbits the object's centre, ``ee' = obj + dp + dR (ee - obj)``, ``R_ee' = dR R_ee``.
+
+    The result is a *relative* command to the OSC, which closes only ~20 % of it per 20 Hz
+    step (measured: 3 mm asked -> 0.6 mm moved, 6 deg -> 1.1 deg). So the gains are ~5 and
+    the caps bound the command, not the motion: ``max_cmd_pos`` of 40 mm moves the object
+    ~8 mm per step. Upstream's free-hand deltas do the same thing (x2, up to 115 mm).
     """
 
-    def __init__(self, kp_pos: float = 1.0, kp_rot: float = 1.0, max_step_pos: float = 0.008, max_step_rot_deg: float = 6.0):
+    def __init__(self, kp_pos: float = 5.0, kp_rot: float = 5.0, max_cmd_pos: float = 0.04, max_cmd_rot_deg: float = 30.0):
         self.kp_pos = kp_pos
         self.kp_rot = kp_rot
-        self.max_step_pos = max_step_pos
-        self.max_step_rot = np.radians(max_step_rot_deg)
+        self.max_step_pos = max_cmd_pos
+        self.max_step_rot = np.radians(max_cmd_rot_deg)
 
     @staticmethod
     def _sat(v: np.ndarray, cap: float) -> np.ndarray:
@@ -175,8 +180,9 @@ class ServoOneLegPolicy:
         self.leg = SquareTableLegPart("square_table_leg4", OneLegScriptedPolicy.LEG4_ASSEMBLED_POS, self.rng, noise)
         self.leg.q7_margin = q7_margin
         self.leg.hover_dz = hover_dz
-        self.leg.wind_step_deg = wind_step_deg
-        self.servo = ObjectServo(max_step_pos=pos_step, max_step_rot_deg=rot_step_deg)
+        self.leg.wind_step_deg = 5.0 * wind_step_deg  # a command, closed ~20 % per step (see ObjectServo)
+        # pos_step / rot_step_deg are the wanted motion per step; the command is kp x that
+        self.servo = ObjectServo(max_cmd_pos=5.0 * pos_step, max_cmd_rot_deg=5.0 * rot_step_deg)
         self.lead = np.radians(lead_deg)
         self.press = press
         self.insert_rate = insert_rate
@@ -316,7 +322,7 @@ class ServoOneLegPolicy:
             # bolt tip just above the hole: origin at seat + 30 mm (bolt is 25.4 mm long)
             tgt = np.array([seat[0], seat[1], seat[2] + 0.030])
             goal_pos, goal_R, ep, er = self.servo.step(leg_pos, leg_R, tgt, upright_goal(leg_R), ee_pos, ee_R)
-            if (ep < 0.002 and leg_tilt_deg(leg_R) < 2.0) or self.phase_steps >= 80:
+            if (ep < 0.002 and leg_tilt_deg(leg_R) < 2.0) or self.phase_steps >= 120:
                 self._goto("leg_lower")
         elif self.phase == "leg_lower":
             # down at insert_rate until the leg's own height stops changing (the thread holds it)
