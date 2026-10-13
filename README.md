@@ -92,6 +92,9 @@ python scripts/collect_scripted.py --headless --num_demos 1 --out_dir ~/fb_demos
 #   a part leaving upstream's position limits ends the attempt as a failure. Not headless, viewport focused:
 #   k = this rollout fails now, l = quit.
 #   --part_friction / --table_friction override FurnitureSim's 0.15 / 0.10
+#   screwing (this port): per grasp the open hand winds back to joint 7's -limit, lowers square onto the
+#   leg, centres it on the hole, then only the wrist turns (~300 deg) until joint 7 nears its +limit;
+#   --yaw_step (45 deg/step) and --screw_press (0.005 m) tune it
 
 python scripts/replay_demo.py --demo ~/fb_demos/one_leg/<d>/<d>.pkl --mode ee_track --headless --out ee_track.mp4
 python scripts/replay_demo.py --demo ~/fb_demos/one_leg/<d>/<d>.pkl --mode actions  --headless --out actions.mp4

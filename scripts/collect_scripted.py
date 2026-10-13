@@ -38,6 +38,8 @@ parser.add_argument("--out_dir", type=str, default="fb_demos")
 parser.add_argument("--num_demos", type=int, default=1)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--no_noise", action="store_true", help="disable upstream's target/action noise")
+parser.add_argument("--yaw_step", type=float, default=45.0, help="deg of yaw commanded per step while winding back / screwing")
+parser.add_argument("--screw_press", type=float, default=0.005, help="m pressed on the thread per step while screwing (upstream 0.005)")
 parser.add_argument("--timeout", type=int, default=600, help="upstream's scripted_timeout for one_leg")
 parser.add_argument("--save_failure", action="store_true", help="keep failed attempts (pkl + video) under fails/")
 parser.add_argument("--record", action="store_true", help="film every attempt (headless ok)")
@@ -207,7 +209,9 @@ def read_state(env, part_names, mesh_frame: str):
 
     obstacles = {"obstacle_front": np.array(frames.OBSTACLE_FRONT_POS)}
     obstacles.update({k: np.array(v) for k, v in frames.OBSTACLE_SIDE_POS.items()})
-    state = sp.ScriptedState(ee_pos, sp.quat_to_mat(ee_quat), width, parts_tag, obstacles)
+    state = sp.ScriptedState(
+        ee_pos, sp.quat_to_mat(ee_quat), width, parts_tag, obstacles, robot.data.joint_pos[0, arm].cpu().numpy().astype(np.float64)
+    )
     obs = {
         "robot_state": {
             "ee_pos": ee_pos.astype(np.float32),
@@ -280,6 +284,8 @@ def main() -> None:
         tmp_video = out_root / f".attempt{attempt}.mp4"
         recorder = Recorder(env, tmp_video) if args.record else None
         policy = sp.OneLegScriptedPolicy(seed=args.seed + attempt - 1, noise=not args.no_noise)
+        policy.leg.yaw_step_deg = args.yaw_step
+        policy.leg.screw_press = args.screw_press
         obs_list, acts, rews, skills = [], [], [], []
         assembled_step = None
         last_state = ""

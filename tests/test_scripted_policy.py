@@ -7,11 +7,13 @@ from furniture_lab import scripted_policy as sp
 from furniture_lab.tasks.furniture import frames, square_table as st
 
 
-def _state(ee_pos=(0.5, 0.0, 0.2), width=0.065):
+def _state(ee_pos=(0.5, 0.0, 0.2), width=0.065, q7=0.0):
     parts_tag = {p.name: sp.hom(np.asarray(p.reset_rot_tag)[:3, :3], p.reset_pos_tag) for p in st.PARTS}
     obst = {"obstacle_front": np.array(frames.OBSTACLE_FRONT_POS)}
     obst.update({k: np.array(v) for k, v in frames.OBSTACLE_SIDE_POS.items()})
-    return sp.ScriptedState(np.array(ee_pos, dtype=float), sp.rot_mat((np.pi, 0, 0)), width, parts_tag, obst)
+    joints = np.array(frames.RESET_JOINTS[:7], dtype=float)
+    joints[6] = q7
+    return sp.ScriptedState(np.array(ee_pos, dtype=float), sp.rot_mat((np.pi, 0, 0)), width, parts_tag, obst, joints)
 
 
 def test_frames_round_trip():
@@ -80,3 +82,67 @@ def test_pre_assembly_advances_under_ideal_tracking():
             break
     assert seen[:6] == ["reach_body_grasp_xy", "reach_body_grasp_z", "pick_body", "push", "release", "go_up"]
     assert pol.top.pre_assemble_done
+
+
+def _yaw(R):
+    return float(np.degrees(np.arctan2(R[1, 0], R[0, 0])))
+
+
+def _track(s, goal_pos, goal_rot, gripper, leg):
+    """Ideal world: the hand reaches its goal; joint 7 follows the hand's yaw (+q7 = -yaw)."""
+    dyaw = np.radians(_yaw(goal_rot) - _yaw(s.ee_rot))
+    dyaw = (dyaw + np.pi) % (2 * np.pi) - np.pi
+    s.joints[6] -= dyaw
+    s.ee_pos, s.ee_rot = goal_pos.copy(), goal_rot.copy()
+    s.gripper_width = 0.03 if gripper > 0 else 0.065
+
+
+def test_regrasp_winds_back_then_screws_with_the_wrist_only():
+    """From 'insert' the leg phase hovers over the leg and winds the open hand toward joint 7's
+    -limit, lowers square onto it, closes, centres it on the hole, then tightens until joint 7
+    nears its +limit -- a ~300 deg turn per grasp -- with the hand staying on the hole axis."""
+    pol = sp.OneLegScriptedPolicy(seed=0, noise=False)
+    leg = pol.leg
+    s = _state(ee_pos=(0.45, 0.03, 0.09), q7=0.3)
+    leg._state, leg.first_setting_target = "insert", True
+    leg.prev_pose = s.ee_pose  # what insert_wait would have left
+    hole = (sp.APRIL_TO_ROBOT @ s.parts_tag["square_table_top"] @ leg.default_assembled_pose)[:3, 3]
+    leg_c = (sp.APRIL_TO_ROBOT @ s.parts_tag["square_table_leg4"])[:3, 3]
+    seen, q7_at_grasp, screw_steps, max_yaw_step = [], None, 0, 0.0
+    for _ in range(400):
+        state = leg._state  # the state this step's goal belongs to
+        goal_pos, goal_rot, gripper, _ = leg.fsm_step(s, "square_table_top")
+        if not seen or seen[-1] != leg._state:
+            seen.append(leg._state)
+        if state == "pre_grasp":
+            assert gripper == -1 and abs(goal_pos[2] - (leg_c[2] + leg.hover_dz)) < 1e-9  # open, hovering
+        if state == "screw_grasp" and q7_at_grasp is None:
+            q7_at_grasp = s.joints[6]
+        if state == "screw":
+            screw_steps += 1
+            assert np.allclose(goal_pos[:2], hole[:2])  # on the hole axis
+            assert np.allclose(goal_rot[:, 2], [0, 0, -1])  # gripper straight down
+            assert abs(goal_pos[2] - (s.ee_pos[2] - leg.screw_press)) < 1e-9
+            max_yaw_step = max(max_yaw_step, abs(((_yaw(goal_rot) - _yaw(s.ee_rot) + 180) % 360) - 180))
+        if leg._state == "release":
+            break
+        _track(s, goal_pos, goal_rot, gripper, leg)
+    assert seen == ["pre_grasp", "grasp_lower", "screw_grasp", "screw_align", "screw", "release"]
+    assert abs(q7_at_grasp - (leg.Q7_MIN + leg.q7_margin)) < 0.06  # wound back before the grasp
+    assert s.joints[6] > leg.Q7_MAX - leg.q7_margin - 0.06  # tightened to the other end
+    assert np.degrees(s.joints[6] - q7_at_grasp) > 290  # one grasp, ~300 deg of screwing
+    assert max_yaw_step <= leg.yaw_step_deg + 1e-6
+    assert screw_steps >= 290 / leg.yaw_step_deg
+
+
+def test_screw_ends_when_joint7_stops_advancing():
+    """A bottomed leg (or slipping fingers): joint 7 does not move -> release after 8 steps."""
+    leg = sp.OneLegScriptedPolicy(seed=0, noise=False).leg
+    s = _state(ee_pos=(0.45, 0.03, 0.09), q7=-2.5)
+    leg._state, leg.first_setting_target, leg.gripper_action = "screw_align", True, 1
+    for _ in range(40):
+        goal_pos, goal_rot, gripper, _ = leg.fsm_step(s, "square_table_top")
+        if leg._state == "release":
+            break
+        s.ee_pos = goal_pos.copy()  # position tracks, the wrist does not turn
+    assert leg._state == "release" and s.joints[6] == -2.5

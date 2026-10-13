@@ -114,6 +114,8 @@ class ScriptedState:
     parts_tag: Dict[str, np.ndarray]
     #: obstacle name -> position in the robot-base frame
     obstacles_robot: Dict[str, np.ndarray]
+    #: the 7 arm joints (rad); the screwing states read joint 7
+    joints: Optional[np.ndarray] = None
 
     @property
     def ee_pose(self) -> np.ndarray:
@@ -327,6 +329,18 @@ class SquareTableLegPart(_Part):
         self.default_assembled_pose = get_mat(default_assembled_pos, [0, 0, 0])
         self.skill_complete_next_states = ("lift_up", "insert")
         self.pre_assemble_done = True  # a leg has no pre-assembly phase
+        # -- screwing (this port; upstream yaws -95 deg per grasp from yaw 0)
+        #: the wrist cannot spin: panda_joint7 is limited to +-2.8973 rad. Each grasp winds
+        #: the open hand back to Q7_MIN + margin, then tightens to Q7_MAX - margin.
+        self.q7_margin = 0.15
+        #: yaw commanded per step (deg); the controller is led by at most this much
+        self.yaw_step_deg = 45.0
+        #: press on the thread while turning (m per step, upstream 0.005)
+        self.screw_press = 0.005
+        #: hover above the leg centre by this much while re-orienting the open hand
+        self.hover_dz = 0.06
+        self._q7_prev: Optional[float] = None
+        self._stall = 0
         self._state = "reach_leg_floor_xy"
 
     def reset(self) -> None:
@@ -336,6 +350,32 @@ class SquareTableLegPart(_Part):
 
     def state_no_noise(self) -> bool:
         return self._state in ("insert_wait", "insert_release", "insert")
+
+    # panda_joint7 limits (rad), identical on the FR3 and in Isaac Lab's Franka
+    Q7_MIN = -2.8973
+    Q7_MAX = 2.8973
+
+    @staticmethod
+    def _yaw(R: np.ndarray) -> float:
+        """World yaw of the hand's x-axis (rad)."""
+        return float(np.arctan2(R[1, 0], R[0, 0]))
+
+    @staticmethod
+    def _down(yaw: float) -> np.ndarray:
+        """Gripper pointing straight down, hand x-axis at world yaw ``yaw``."""
+        return (get_mat([0, 0, 0], [0, 0, yaw]) @ get_mat([0, 0, 0], [np.pi, 0, 0]))[:3, :3]
+
+    def _q7(self, s: ScriptedState) -> float:
+        if s.joints is None:
+            raise ValueError("ScriptedState.joints is needed for the screwing states")
+        return float(s.joints[6])
+
+    def _yaw_toward(self, s: ScriptedState, ee_pose, q7_goal: float) -> Tuple[float, float]:
+        """World yaw target that moves joint 7 toward ``q7_goal`` by at most ``yaw_step_deg``
+        this step (+q7 is -world yaw, verified by FK), and the remaining joint travel (rad)."""
+        remaining = q7_goal - self._q7(s)
+        step = float(np.clip(remaining, -np.radians(self.yaw_step_deg), np.radians(self.yaw_step_deg)))
+        return self._yaw(ee_pose[:3, :3]) - step, remaining
 
     @staticmethod
     def _find_down_z(mat: np.ndarray) -> np.ndarray:
@@ -467,11 +507,23 @@ class SquareTableLegPart(_Part):
             if self.gripper_greater(s.gripper_width, MAX_GRIPPER_WIDTH - 0.001):
                 next_state = "pre_grasp"
         elif self._state == "pre_grasp":
-            target_ori = get_mat([0, 0, 0], [np.pi, 0, 0])[:3, :3]
+            # hover above the leg's centre and wind the open hand back toward joint 7's -limit,
+            # so the coming grasp has the most tightening travel
+            hole = (a2r @ table_pose @ self.default_assembled_pose)[:3, 3]
+            target_pos = (a2r @ leg_pose[:4, 3])[:3].copy()
+            target_pos[2] += self.grasp_margin_z + self.hover_dz
+            yaw, remaining = self._yaw_toward(s, ee_pose, self.Q7_MIN + self.q7_margin)
+            target = hom(self._down(yaw), target_pos)
+            if abs(remaining) < 0.05 and self.satisfy(ee_pose, target, pos_error_threshold=0.01, ori_error_threshold=0.3, max_len=60):
+                next_state = "grasp_lower"
+            elif self.curr_cnt - self.prev_cnt >= 60:
+                next_state = "grasp_lower"
+        elif self._state == "grasp_lower":
+            # straight down onto the leg, hand square to its top, centred on its axis
             target_pos = (a2r @ leg_pose[:4, 3])[:3].copy()
             target_pos[2] += self.grasp_margin_z
-            target = hom(target_ori, target_pos)
-            if self.satisfy(ee_pose, target):
+            target = hom(self._down(self._yaw(ee_pose[:3, :3])), target_pos)
+            if self.satisfy(ee_pose, target, pos_error_threshold=0.006, ori_error_threshold=0.3, max_len=25):
                 self.prev_pose = target
                 next_state = "screw_grasp"
         elif self._state == "screw_grasp":
@@ -479,14 +531,28 @@ class SquareTableLegPart(_Part):
             self.gripper_action = 1
             if self.gripper_less(s.gripper_width, 2 * self.half_width + 0.001):
                 self.prev_pose = target
+                next_state = "screw_align"
+        elif self._state == "screw_align":
+            # hand (and so the leg) over the hole axis; the leg goes vertical in the hole
+            hole = (a2r @ table_pose @ self.default_assembled_pose)[:3, 3]
+            target_pos = np.array([hole[0], hole[1], ee_pos[2]])
+            target = hom(self._down(self._yaw(ee_pose[:3, :3])), target_pos)
+            if self.satisfy(ee_pose, target, pos_error_threshold=0.004, ori_error_threshold=0.3, max_len=10):
+                self._q7_prev = self._q7(s)
+                self._stall = 0
                 next_state = "screw"
         elif self._state == "screw":
-            target_ori = get_mat([0, 0, 0], [np.pi, 0, -np.pi / 2 - np.pi / 36])[:3, :3]
-            target_pos = ee_pos.copy()
-            target_pos[2] -= 0.005
-            target = hom(target_ori, target_pos)
-            if self.satisfy(ee_pose, target, ori_error_threshold=0.3):
-                self.prev_pose = target
+            # tighten: only the wrist turns (joint 7 axis = hand axis = leg axis once centred),
+            # position held on the hole axis with a small press. Ends near joint 7's +limit,
+            # or when joint 7 stops advancing (the leg has bottomed, or the fingers slip).
+            hole = (a2r @ table_pose @ self.default_assembled_pose)[:3, 3]
+            yaw, remaining = self._yaw_toward(s, ee_pose, self.Q7_MAX - self.q7_margin)
+            target = hom(self._down(yaw), np.array([hole[0], hole[1], ee_pos[2] - self.screw_press]))
+            q7 = self._q7(s)
+            self._stall = self._stall + 1 if q7 - self._q7_prev < np.radians(1.0) else 0
+            self._q7_prev = q7
+            if remaining < 0.05 or self._stall >= 8 or self.curr_cnt - self.prev_cnt >= 80:
+                self.prev_pose = hom(self._down(self._yaw(ee_pose[:3, :3])), ee_pos.copy())
                 next_state = "release"
         else:
             raise RuntimeError(f"unknown leg state {self._state!r}")
