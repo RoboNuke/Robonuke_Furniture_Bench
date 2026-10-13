@@ -344,6 +344,16 @@ class SquareTableLegPart(_Part):
         self.hover_dz = 0.06
         self._q7_prev: Optional[float] = None
         self._stall = 0
+        # -- insertion (this port). Upstream opens the fingers with the leg at tag z + 0.084,
+        #: ~20 mm above the seat: the leg free-falls 10 mm onto the first thread and tips
+        #: over on it (12-21 deg in fail1-3.pkl). Here the held leg keeps descending at
+        #: insert_rate per step until its own z stops changing (it has met the thread),
+        #: settles, and only then is released.
+        self.insert_rate = 0.002
+        self.insert_contact_eps = 0.0005  # m over insert_contact_steps steps = stopped
+        self.insert_contact_steps = 3
+        self.insert_min_above_seat = 0.003  # never command below this
+        self._leg_z_hist: list = []
         self._state = "reach_leg_floor_xy"
 
     def reset(self) -> None:
@@ -352,7 +362,7 @@ class SquareTableLegPart(_Part):
         self._state = "reach_leg_floor_xy"
 
     def state_no_noise(self) -> bool:
-        return self._state in ("insert_wait", "insert_release", "insert")
+        return self._state in ("insert_wait", "insert_lower", "insert_settle", "insert_release", "insert")
 
     # panda_joint7 limits (rad), identical on the FR3 and in Isaac Lab's Franka
     Q7_MIN = -2.8973
@@ -510,6 +520,27 @@ class SquareTableLegPart(_Part):
             target = rel_rot_mat(leg_robot, target_leg) @ ee_pose
             if self.satisfy(ee_pose, target, pos_error_threshold=0.0, ori_error_threshold=0.0, max_len=10):
                 self.prev_pose = target
+                self._leg_z_hist = []
+                next_state = "insert_lower"
+        elif self._state == "insert_lower":
+            # keep the upright leg over the hole and lower it until it stops: the target sits
+            # insert_rate below the leg's current height, so the hand follows it down and
+            # presses only insert_rate's worth once the thread holds it
+            leg_robot = self._find_leg_pose_x_look_front(a2r @ leg_pose)
+            seat_z = (a2r @ table_pose @ self.default_assembled_pose)[2, 3]
+            leg_z = leg_robot[2, 3]
+            self._leg_z_hist.append(leg_z)
+            z_cmd = max(leg_z - self.insert_rate, seat_z + self.insert_min_above_seat)
+            target_leg = self._hole_target(s, table_pose, z_cmd)
+            target = rel_rot_mat(leg_robot, target_leg) @ ee_pose
+            h = self._leg_z_hist
+            stopped = len(h) > self.insert_contact_steps and (h[-1 - self.insert_contact_steps] - h[-1]) < self.insert_contact_eps
+            if stopped or leg_z <= seat_z + self.insert_min_above_seat + 1e-4 or self.curr_cnt - self.prev_cnt >= 40:
+                self.prev_pose = hom(ee_pose[:3, :3].copy(), ee_pose[:3, 3].copy())  # hold where it stopped
+                next_state = "insert_settle"
+        elif self._state == "insert_settle":
+            target = self.prev_pose
+            if self.curr_cnt - self.prev_cnt >= 5:
                 next_state = "insert_release"
         elif self._state == "insert_release":
             target = self.prev_pose

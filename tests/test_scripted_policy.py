@@ -166,3 +166,43 @@ def test_regrasp_yaw_is_square_to_the_leg_and_nearest_the_limit():
             yaw_at_goal = leg._yaw(s.ee_rot) - (goal - q7)
             assert abs(((yaw_at_goal - face) % (np.pi / 2) + np.pi / 4) % (np.pi / 2) - np.pi / 4) < 1e-9
             assert leg.Q7_MIN + leg.q7_margin - 1e-9 <= goal < leg.Q7_MIN + leg.q7_margin + np.pi / 2
+
+
+def test_insert_lowers_the_held_leg_to_contact_then_settles_then_releases():
+    """The leg in the fingers descends with the hand until it stops (the thread stop, here
+    9 mm above the seat); the policy must detect the stop, hold, and only then open."""
+    pol = sp.OneLegScriptedPolicy(seed=0, noise=False)
+    leg = pol.leg
+    s = _state(ee_pos=(0.45, 0.03, 0.09))
+    top = s.parts_tag["square_table_top"]
+    seat = (sp.APRIL_TO_ROBOT @ top @ leg.default_assembled_pose)[:3, 3]
+    stop_z = seat[2] + 0.009
+    R_up = np.array([[1.0, 0, 0], [0, 0, -1.0], [0, 1.0, 0]])  # upstream's upright leg (OBJ y up)
+    leg_pos = np.array([seat[0], seat[1], seat[2] + 0.020])  # held 20 mm up, as upstream leaves it
+    s.parts_tag["square_table_leg4"] = sp.ROBOT_TO_APRIL @ sp.hom(R_up, leg_pos)
+    s.ee_pos = leg_pos + np.array([0.0, 0.0, 0.0])
+    s.gripper_width = 0.03
+    leg._state, leg.first_setting_target, leg.gripper_action = "insert_lower", True, 1
+    leg.prev_pose = s.ee_pose
+    seen, released_at = [], None
+    for i in range(80):
+        state = leg._state
+        goal_pos, goal_rot, gripper, _ = leg.fsm_step(s, "square_table_top")
+        if not seen or seen[-1] != leg._state:
+            seen.append(leg._state)
+        if state == "insert_lower":
+            assert gripper == 1
+            assert goal_pos[2] < s.ee_pos[2] + 1e-9  # always asking to go down
+        if gripper == -1 and released_at is None:
+            released_at = (i, leg_pos[2] - seat[2])
+            break
+        # the world: the hand reaches its goal, the leg follows but cannot go below the stop
+        dz = goal_pos[2] - s.ee_pos[2]
+        new_leg_z = max(leg_pos[2] + dz, stop_z)
+        actual_dz = new_leg_z - leg_pos[2]
+        leg_pos = leg_pos + np.array([0.0, 0.0, actual_dz])
+        s.ee_pos = s.ee_pos + np.array([0.0, 0.0, actual_dz])
+        s.parts_tag["square_table_leg4"] = sp.ROBOT_TO_APRIL @ sp.hom(R_up, leg_pos)
+    assert seen[:3] == ["insert_lower", "insert_settle", "insert_release"]
+    assert released_at is not None
+    assert abs(released_at[1] - 0.009) < 1e-6  # opened with the leg resting on the stop, not 20 mm up
