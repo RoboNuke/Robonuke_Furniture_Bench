@@ -76,6 +76,27 @@ upstream and what is this port's choice.
 
 `task.cfg.*` overrides reach every field of the env cfg, as in any project on the package.
 
+## Replaying FurnitureBench demos
+
+`furniture_lab/demos.py` reads a FurnitureBench `.pkl` into this port's frames (robot-base
+frame, `wxyz`, the catalog's mesh frame). `scripts/replay_demo.py` resets the env to the demo's
+first state and drives it two ways, recording an mp4 and a per-step CSV (EE and part errors
+against the demo, the assembled flag):
+
+```bash
+# a sim demo from FurnitureBench's scripted policy, in its own Isaac Gym env (Python 3.8)
+python -m furniture_bench.scripts.collect_data --furniture one_leg --is-sim --scripted \
+    --headless --randomness low --num-demos 1 --out-data-path ~/fb_demos
+
+python scripts/replay_demo.py --demo ~/fb_demos/one_leg/<d>/<d>.pkl --mode ee_track --headless --out ee_track.mp4
+python scripts/replay_demo.py --demo ~/fb_demos/one_leg/<d>/<d>.pkl --mode actions  --headless --out actions.mp4
+```
+
+`ee_track` feeds the recorded EE poses as absolute OSC targets (`OneLegReplayAbsCfg`);
+`actions` feeds the recorded deltas through the task's own `pose_rel` action
+(`OneLegReplayRelCfg`), converted as a policy's output would be. Both cfgs drop the success
+termination so a seated leg is not reset mid-replay.
+
 ## Not covered
 
 * The package's Forge-family wrappers (hybrid force/position controller, fragile object,
