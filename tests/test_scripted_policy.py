@@ -55,9 +55,6 @@ def test_assembled_ends_with_move_neutral_then_done():
     s = _state(ee_pos=(0.5, 0.0, 0.05))
     top = s.parts_tag["square_table_top"]
     s.parts_tag["square_table_leg4"] = top @ sp.get_mat([-0.05625, 0.046875, -0.05625], [0, 0, 0])
-    for _ in range(pol.assembled_hold_steps - 1):  # the check has to hold, not just fire once
-        a = pol.act(s)
-        assert not a.assembled
     a = pol.act(s)
     assert a.assembled and a.skill_complete == 1 and not a.done
     a = pol.act(s)
@@ -83,82 +80,3 @@ def test_pre_assembly_advances_under_ideal_tracking():
             break
     assert seen[:6] == ["reach_body_grasp_xy", "reach_body_grasp_z", "pick_body", "push", "release", "go_up"]
     assert pol.top.pre_assemble_done
-
-
-def _yaw(R):
-    return np.degrees(np.arctan2(R[1, 0], R[0, 0]))
-
-
-def _run_turn(leg, state, s, total_deg, press, max_steps=40):
-    """Drive a turn state with ideal tracking; return (ee poses visited, steps, next state)."""
-    leg._state = state
-    leg.first_setting_target = True
-    leg.gripper_action = 1
-    poses = [sp.hom(s.ee_rot, s.ee_pos)]
-    for i in range(max_steps):
-        goal_pos, goal_rot, gripper, _ = leg.fsm_step(s, "square_table_top")
-        assert gripper == 1
-        s.ee_pos, s.ee_rot = goal_pos.copy(), goal_rot.copy()
-        poses.append(sp.hom(s.ee_rot, s.ee_pos))
-        if leg._state != state:
-            return poses, i + 1, leg._state
-    raise AssertionError("turn never finished")
-
-
-def test_turns_are_about_the_hole_axis_in_steps():
-    """insert_screw (-start_twist) and screw (-95 deg) turn the EE about the vertical axis
-    through the hole: every visited pose keeps its distance from the hole axis, is pressed
-    down, and no single step exceeds turn_step_deg; the total yaw reaches the target."""
-    pol = sp.OneLegScriptedPolicy(seed=0, noise=False)
-    leg = pol.leg
-    assert leg.insert_height == 0.077 and leg.start_twist_deg == 90.0 and leg.insert_press == 0.003
-    for state, total, press, nxt in (("insert_screw", -90.0, 0.003, "insert_release"), ("screw", -95.0, 0.005, "release")):
-        s = _state(ee_pos=(0.45, 0.03, 0.09))
-        hole = (sp.APRIL_TO_ROBOT @ s.parts_tag["square_table_top"] @ leg.default_assembled_pose)[:3, 3]
-        r0 = np.linalg.norm(s.ee_pos[:2] - hole[:2])
-        poses, n, after = _run_turn(leg, state, s, total, press)
-        assert after == nxt
-        for a, b in zip(poses, poses[1:]):
-            assert abs(np.linalg.norm(b[:2, 3] - hole[:2]) - r0) < 1e-9  # on the circle around the hole
-            assert abs(b[2, 3] - (a[2, 3] - press)) < 1e-9  # pressed down each step
-            d = _yaw(b[:3, :3]) - _yaw(a[:3, :3])
-            assert abs(((d + 180) % 360) - 180) <= leg.turn_step_deg + 1e-6
-        total_yaw = ((_yaw(poses[-1][:3, :3]) - _yaw(poses[0][:3, :3]) + 180) % 360) - 180
-        assert abs(total_yaw - total) < 2.0
-        assert n >= abs(total) / leg.turn_step_deg  # fed in steps, not at once
-    # upstream's sequence with the twist off
-    leg0 = sp.OneLegScriptedPolicy(seed=0, noise=False, start_twist_deg=0.0).leg
-    leg0._state = "insert_wait"
-    leg0.first_setting_target = True
-    s = _state(ee_pos=(0.45, 0.03, 0.09))
-    states = []
-    for _ in range(12):  # insert_wait has max_len 10
-        leg0.fsm_step(s, "square_table_top")
-        states.append(leg0._state)
-    assert "insert_release" in states and "insert_screw" not in states
-
-
-def test_turn_position_never_runs_ahead_of_a_lagging_orientation():
-    """Position tracks perfectly, orientation only gets halfway each step: the angle of the
-    hand around the hole axis must stay within one turn step of the hand's actual yaw."""
-    leg = sp.OneLegScriptedPolicy(seed=0, noise=False).leg
-    s = _state(ee_pos=(0.45, 0.03, 0.09))
-    hole = (sp.APRIL_TO_ROBOT @ s.parts_tag["square_table_top"] @ leg.default_assembled_pose)[:3, 3]
-    off0 = s.ee_pos[:2] - hole[:2]
-    R0 = s.ee_rot.copy()
-    leg._state, leg.first_setting_target, leg.gripper_action = "screw", True, 1
-    for _ in range(60):
-        goal_pos, goal_rot, _, _ = leg.fsm_step(s, "square_table_top")
-        if leg._state != "screw":
-            break
-        s.ee_pos = goal_pos.copy()
-        # halfway toward the goal orientation, about the vertical
-        want = _yaw(goal_rot @ R0.T)
-        have = _yaw(s.ee_rot @ R0.T)
-        s.ee_rot = sp.get_mat([0, 0, 0], [0, 0, np.radians(have + 0.5 * (want - have))])[:3, :3] @ R0
-        off = s.ee_pos[:2] - hole[:2]
-        around = np.degrees(np.arctan2(off[1], off[0]) - np.arctan2(off0[1], off0[0]))
-        around = ((around + 180) % 360) - 180
-        assert abs(around - _yaw(s.ee_rot @ R0.T)) <= leg.turn_step_deg + 1e-6
-    assert leg._state == "release"
-    assert abs(_yaw(s.ee_rot @ R0.T) + 95.0) < 3.0

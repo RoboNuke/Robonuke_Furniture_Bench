@@ -319,33 +319,8 @@ class SquareTableTopPart(_Part):
 class SquareTableLegPart(_Part):
     """``Leg.fsm_step`` with ``SquareTableLeg``'s numbers."""
 
-    def __init__(
-        self,
-        name: str,
-        default_assembled_pos,
-        rng,
-        noise,
-        insert_height: float = 0.077,
-        start_twist_deg: float = 90.0,
-        insert_press: float = 0.003,
-        turn_step_deg: float = 10.0,
-    ) -> None:
+    def __init__(self, name: str, default_assembled_pos, rng, noise) -> None:
         super().__init__(name, rng, noise)
-        #: every turn (the thread start and upstream's screw) is about the vertical axis
-        #: through the hole, not the EE's own axis (an off-centre grasp would orbit the leg
-        #: and pull it out), and is fed to the controller this many degrees per step.
-        self.turn_step_deg = turn_step_deg
-        self._turn_R0: Optional[np.ndarray] = None
-        #: where the leg centre goes before release, above the top's tag-frame z. Upstream
-        #: uses 0.084 (bolt tip ~5 mm above the boss; the leg drops onto the thread and, in
-        #: this sim, topples). scripts/smoke.py --drop measured the free-drop thread stop at
-        #: 0.072; a grasped leg meets the boss at a random thread phase and stops higher.
-        self.insert_height = insert_height
-        #: how far below the insert height the twist target sits (the press on the thread)
-        self.insert_press = insert_press
-        #: turn applied about the hole axis while still grasped, before releasing, so the
-        #: thread is started and the leg stands on its own. 0 restores upstream's behaviour.
-        self.start_twist_deg = start_twist_deg
         self.half_width = 0.015
         self.grasp_margin_x = 0.0
         self.grasp_margin_z = 0.0
@@ -360,7 +335,7 @@ class SquareTableLegPart(_Part):
         self._state = "reach_leg_floor_xy"
 
     def state_no_noise(self) -> bool:
-        return self._state in ("insert_wait", "insert_screw", "insert_release", "insert")
+        return self._state in ("insert_wait", "insert_release", "insert")
 
     @staticmethod
     def _find_down_z(mat: np.ndarray) -> np.ndarray:
@@ -394,34 +369,6 @@ class SquareTableLegPart(_Part):
                 [0.0, 0.0, 0.0, 1.0],
             ]
         )
-
-    def _turned_deg(self, ee_pose: np.ndarray) -> float:
-        """Yaw of the EE about the world vertical since the turn began (signed degrees)."""
-        rel = ee_pose[:3, :3] @ self._turn_R0.T
-        return float(np.degrees(np.arctan2(rel[1, 0], rel[0, 0])))
-
-    def _turn_target(self, s: ScriptedState, table_pose, ee_pose, total_deg: float, press: float):
-        """The next target of a turn about the hole axis.
-
-        Both the orientation and the position are driven by the yaw the hand has *actually*
-        reached: the commanded angle is that yaw plus at most ``turn_step_deg`` toward
-        ``total_deg`` (negative = clockwise seen from above); the target orientation is the
-        start orientation yawed by it, the target position is the start offset from the hole
-        axis yawed by it. Rotating the current pose each step instead lets the position (fast)
-        run ahead of the orientation (slow) around the circle, which drags the leg sideways.
-        Pressed ``press`` below the current height. Returns (target, finished)."""
-        hole = (APRIL_TO_ROBOT @ table_pose @ self.default_assembled_pose)[:3, 3]
-        if self.first_setting_target:
-            self._turn_R0 = ee_pose[:3, :3].copy()
-            self._turn_offset0 = ee_pose[:3, 3] - hole  # the hand's offset from the hole axis
-            self.first_setting_target = False
-        turned = self._turned_deg(ee_pose)
-        remaining = total_deg - turned
-        cmd = turned + float(np.clip(remaining, -self.turn_step_deg, self.turn_step_deg))
-        Rz = get_mat([0, 0, 0], [0, 0, np.radians(cmd)])[:3, :3]
-        target = hom(Rz @ self._turn_R0, hole + Rz @ self._turn_offset0)
-        target[2, 3] = ee_pose[2, 3] - press
-        return target, abs(remaining) < 2.0
 
     def fsm_step(self, s: ScriptedState, assemble_to: str):
         next_state = self._state
@@ -501,16 +448,9 @@ class SquareTableLegPart(_Part):
                 next_state = "insert_wait"
         elif self._state == "insert_wait":
             leg_robot = self._find_leg_pose_x_look_front(a2r @ leg_pose)
-            target_leg = self._hole_target(s, table_pose, table_pose[2, 3] + self.insert_height)
+            target_leg = self._hole_target(s, table_pose, table_pose[2, 3] + 0.084)
             target = rel_rot_mat(leg_robot, target_leg) @ ee_pose
             if self.satisfy(ee_pose, target, pos_error_threshold=0.0, ori_error_threshold=0.0, max_len=10):
-                self.prev_pose = target
-                next_state = "insert_screw" if self.start_twist_deg > 0 else "insert_release"
-        elif self._state == "insert_screw":
-            # start the thread while still holding the leg: turn it about the hole axis by
-            # -start_twist, pressing down insert_press
-            target, finished = self._turn_target(s, table_pose, ee_pose, -self.start_twist_deg, self.insert_press)
-            if finished or self.curr_cnt - self.prev_cnt >= 40:
                 self.prev_pose = target
                 next_state = "insert_release"
         elif self._state == "insert_release":
@@ -541,10 +481,11 @@ class SquareTableLegPart(_Part):
                 self.prev_pose = target
                 next_state = "screw"
         elif self._state == "screw":
-            # upstream: yaw the EE to -(90 + 5) deg in place, pressing 5 mm; here the same turn
-            # is made about the hole axis, in steps
-            target, finished = self._turn_target(s, table_pose, ee_pose, -95.0, 0.005)
-            if finished or self.curr_cnt - self.prev_cnt >= 25:
+            target_ori = get_mat([0, 0, 0], [np.pi, 0, -np.pi / 2 - np.pi / 36])[:3, :3]
+            target_pos = ee_pos.copy()
+            target_pos[2] -= 0.005
+            target = hom(target_ori, target_pos)
+            if self.satisfy(ee_pose, target, ori_error_threshold=0.3):
                 self.prev_pose = target
                 next_state = "release"
         else:
@@ -586,37 +527,14 @@ class OneLegScriptedPolicy:
         ]
     )
 
-    def __init__(
-        self,
-        seed: int = 0,
-        noise: bool = True,
-        assembled_hold_steps: int = 10,
-        insert_height: float = 0.077,
-        start_twist_deg: float = 90.0,
-        insert_press: float = 0.003,
-        turn_step_deg: float = 10.0,
-    ) -> None:
+    def __init__(self, seed: int = 0, noise: bool = True) -> None:
         self.rng = np.random.default_rng(seed)
         self.noise = noise
         self.top = SquareTableTopPart(self.rng, noise)
-        self.leg = SquareTableLegPart(
-            "square_table_leg4",
-            self.LEG4_ASSEMBLED_POS,
-            self.rng,
-            noise,
-            insert_height,
-            start_twist_deg,
-            insert_press,
-            turn_step_deg,
-        )
+        self.leg = SquareTableLegPart("square_table_leg4", self.LEG4_ASSEMBLED_POS, self.rng, noise)
         self.assemble_idx = 0
         self.move_neutral = False
         self.steps = 0
-        #: the assembled check must hold this many consecutive steps before it counts
-        #: (upstream fires on a single step, which a leg being knocked through the seat
-        #: pose also satisfies)
-        self.assembled_hold_steps = assembled_hold_steps
-        self.assembled_streak = 0
 
     # -- the assembled check upstream runs inside get_assembly_action (Furniture.assembled)
     def assembled(self, s: ScriptedState) -> bool:
@@ -650,8 +568,7 @@ class OneLegScriptedPolicy:
             noop.assembled = True
             return noop
 
-        self.assembled_streak = self.assembled_streak + 1 if self.assembled(s) else 0
-        if self.assembled_streak >= self.assembled_hold_steps:
+        if self.assembled(s):
             self.assemble_idx += 1
             self.move_neutral = True
             noop.assembled = True

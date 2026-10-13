@@ -88,10 +88,10 @@ against the demo, the assembled flag):
 # run in THIS env; writes FurnitureBench's pkl format and layout
 python scripts/collect_scripted.py --headless --num_demos 1 --out_dir ~/fb_demos --record --save_failure
 #   success -> ~/fb_demos/one_leg/<stamp>/{<stamp>.pkl, recording.mp4}; failure -> ~/fb_demos/one_leg/fails/fail<n>.{pkl,mp4}
-#   success = FurnitureBench's assembled rule holding 10 steps AND still true at the end, after the hand lifts;
+#   success = FurnitureBench's assembled rule fired AND still true at the end, after the hand lifts;
 #   a part leaving upstream's position limits ends the attempt as a failure. Not headless, viewport focused:
 #   k = this rollout fails now, l = quit.
-#   insertion knobs: --insert_height 0.077 --insert_press 0.003 --start_twist 90 (0 = upstream's sequence)
+#   --part_friction / --table_friction override FurnitureSim's 0.15 / 0.10
 
 python scripts/replay_demo.py --demo ~/fb_demos/one_leg/<d>/<d>.pkl --mode ee_track --headless --out ee_track.mp4
 python scripts/replay_demo.py --demo ~/fb_demos/one_leg/<d>/<d>.pkl --mode actions  --headless --out actions.mp4

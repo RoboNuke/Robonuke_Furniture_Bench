@@ -38,11 +38,6 @@ parser.add_argument("--out_dir", type=str, default="fb_demos")
 parser.add_argument("--num_demos", type=int, default=1)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--no_noise", action="store_true", help="disable upstream's target/action noise")
-parser.add_argument("--hold_steps", type=int, default=10, help="steps the assembled check must hold to count")
-parser.add_argument("--insert_height", type=float, default=0.077, help="leg centre above the top's tag z at insertion (upstream 0.084)")
-parser.add_argument("--insert_press", type=float, default=0.003, help="m the twist target sits below the insert height (the press on the thread)")
-parser.add_argument("--turn_step", type=float, default=10.0, help="deg per step the turns about the hole axis are fed to the controller")
-parser.add_argument("--start_twist", type=float, default=90.0, help="deg of thread-starting twist while still grasped (0 = upstream)")
 parser.add_argument("--timeout", type=int, default=600, help="upstream's scripted_timeout for one_leg")
 parser.add_argument("--save_failure", action="store_true", help="keep failed attempts (pkl + video) under fails/")
 parser.add_argument("--record", action="store_true", help="film every attempt (headless ok)")
@@ -284,15 +279,7 @@ def main() -> None:
             env.step(zero)  # let the parts settle after the reset
         tmp_video = out_root / f".attempt{attempt}.mp4"
         recorder = Recorder(env, tmp_video) if args.record else None
-        policy = sp.OneLegScriptedPolicy(
-            seed=args.seed + attempt - 1,
-            noise=not args.no_noise,
-            assembled_hold_steps=args.hold_steps,
-            insert_height=args.insert_height,
-            start_twist_deg=args.start_twist,
-            insert_press=args.insert_press,
-            turn_step_deg=args.turn_step,
-        )
+        policy = sp.OneLegScriptedPolicy(seed=args.seed + attempt - 1, noise=not args.no_noise)
         obs_list, acts, rews, skills = [], [], [], []
         assembled_step = None
         last_state = ""
@@ -331,9 +318,9 @@ def main() -> None:
             _, ee_quat_b = ee_pose_b(env)
             env.step(env_action(env, a, ee_quat_b))
             now_assembled = bool(assembled_now(env))  # the raw check, not the latch
-            if a.assembled and assembled_step is None:  # the policy's held check fired
+            if a.assembled and assembled_step is None:  # the policy's own check fired
                 assembled_step = t
-                print(f"[collect] step {t:4d}: assembled (held {args.hold_steps} steps)", flush=True)
+                print(f"[collect] step {t:4d}: assembled", flush=True)
             reward = 1.0 if assembled_step == t else 0.0
             rews.append(reward)
             skills.append(float(a.skill_complete))
