@@ -127,7 +127,7 @@ class Recorder:
             draw.rectangle([(x0, y0), (x0 + box_w, y0 + box_h)], fill=(0, 0, 0))
             for i, line in enumerate(lines):
                 draw.text((x0 + pad, y0 + pad + i * lh), line, fill=(255, 255, 0))
-        self.writer.append(torch.from_numpy(__import__("numpy").asarray(image)))
+        self.writer.append(torch.from_numpy(__import__("numpy").array(image)))
         self.frames += 1
 
     def close(self) -> None:
@@ -327,8 +327,12 @@ def main() -> None:
                 f"(max {drift.max().item():.4f})  rel z {rel_pos[:, 2].mean().item():.4f}  "
                 f"axis cos {[f'{v:.3f}' for v in diag.mean(0).tolist()]}  assembled {now.tolist()}"
             )
-        best = min(results, key=lambda r: r[1])
-        print(f"[smoke] least drift at yaw {best[0]:.1f} deg: {best[1]:.4f} m, assembled rate {best[2]:.2f}")
+        seated = [r for r in results if r[1] < 0.002]
+        passed = [r for r in seated if r[2] > 0.5]
+        print(
+            f"[smoke] seated (drift < 2 mm) at {[r[0] for r in seated]} deg; "
+            f"assembled by upstream's rule at {[r[0] for r in passed]} deg"
+        )
         print("[smoke] read: small drift = the pose is physically consistent at that twist;")
         print("[smoke]       assembled True = upstream's rule (all axes within ~20 deg, position")
         print("[smoke]       within tolerance) accepts it. In the real env success ends the episode.")
