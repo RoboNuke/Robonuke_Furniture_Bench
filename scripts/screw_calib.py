@@ -55,6 +55,8 @@ parser.add_argument("--descend_time", type=float, default=1.5)
 parser.add_argument("--close_time", type=float, default=1.0)
 parser.add_argument("--settle", type=int, default=20, help="env steps after the teleport")
 parser.add_argument("--part_friction", type=float, default=None)
+parser.add_argument("--grip_stiffness", type=float, default=None, help="finger drive N/m (default 600; Isaac Lab's Franka 2000)")
+parser.add_argument("--grip_force", type=float, default=None, help="finger effort limit N (default 30; Isaac Lab's Franka 200)")
 parser.add_argument("--table_friction", type=float, default=None)
 parser.add_argument("--csv", type=str, default=None, help="write the per-step log here")
 parser.add_argument("--out", type=str, default=None, help="mp4 of the test")
@@ -172,6 +174,11 @@ def main() -> None:
     if args.table_friction is not None:
         cfg.furniture.table_friction = args.table_friction
     cfg.apply_friction()
+    if args.grip_stiffness is not None:
+        cfg.furniture.gripper_stiffness = args.grip_stiffness
+    if args.grip_force is not None:
+        cfg.furniture.gripper_effort_limit = args.grip_force
+    cfg.apply_gripper()
     if args.out:
         cfg.scene.clone_in_fabric = False
         setattr(

@@ -123,6 +123,14 @@ class FurnitureCfg:
     #: ``AssemblyEnvCfg.__post_init__`` to the startup events and the sim material.
     part_friction: float = PART_FRICTION
     table_friction: float = TABLE_FRICTION
+    #: the finger drives. Isaac Lab's Franka: stiffness 2000 N/m, effort limit 200 N, each
+    #: finger its own drive -- the first pad to touch a leg that is held by its thread shoves
+    #: it over (~25 N on a 3 cm lever) before the other pad arrives, and the fingers close
+    #: through it (fail2.pkl: width 0.044 -> 0.000, leg thrown). Upstream drives the gripper
+    #: at 13 N (effort) or 200 N/m (position). A real hand grips at 20-70 N.
+    gripper_stiffness: float = 600.0  # N/m: ~9 N squeeze on a 30 mm leg
+    gripper_damping: float = 40.0
+    gripper_effort_limit: float = 30.0  # N per finger
 
 
 @configclass
@@ -284,6 +292,16 @@ class AssemblyEnvCfg(ManagerBasedRLEnvCfg):
         if self.furniture.task is MISSING:
             raise ValueError("furniture.task is unset: use OneLegEnvCfg or SquareTableEnvCfg")
         self.apply_friction()
+        self.apply_gripper()
+
+    def apply_gripper(self) -> None:
+        """Push ``furniture.gripper_*`` into the finger actuator (call again after changing them)."""
+        act = self.scene.robot.actuators["panda_hand"]
+        act.stiffness = float(self.furniture.gripper_stiffness)
+        act.damping = float(self.furniture.gripper_damping)
+        for name in ("effort_limit", "effort_limit_sim"):
+            if hasattr(act, name):
+                setattr(act, name, float(self.furniture.gripper_effort_limit))
 
     def apply_friction(self) -> None:
         """Push ``furniture.part_friction`` / ``table_friction`` into the startup friction

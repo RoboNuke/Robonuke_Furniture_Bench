@@ -159,3 +159,16 @@ def test_friction_knobs_reach_the_events_and_the_table(cfg_module):
         assert term.params["dynamic_friction_range"] == (0.5, 0.5)
     assert cfg.sim.physics_material.static_friction == 0.4
     assert cfg.sim.physics_material.dynamic_friction == 0.4
+
+
+def test_gripper_knobs_reach_the_finger_actuator(cfg_module):
+    cfg = cfg_module.OneLegEnvCfg()
+    act = cfg.scene.robot.actuators["panda_hand"]
+    assert act.stiffness == 600.0 and act.damping == 40.0
+    cfg.furniture.gripper_stiffness = 2000.0
+    cfg.furniture.gripper_effort_limit = 200.0
+    cfg.apply_gripper()
+    assert act.stiffness == 2000.0
+    for name in ("effort_limit", "effort_limit_sim"):
+        if hasattr(act, name):
+            assert getattr(act, name) == 200.0

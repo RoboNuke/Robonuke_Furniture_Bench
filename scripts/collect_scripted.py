@@ -51,6 +51,8 @@ parser.add_argument("--cam", type=str, default="0.95,0.45,0.35")
 parser.add_argument("--look", type=str, default="0.54,0.0,0.03")
 parser.add_argument("--print_every", type=int, default=25)
 parser.add_argument("--part_friction", type=float, default=None, help="parts' friction (FurnitureSim: 0.15)")
+parser.add_argument("--grip_stiffness", type=float, default=None, help="finger drive N/m (default 600; Isaac Lab's Franka 2000)")
+parser.add_argument("--grip_force", type=float, default=None, help="finger effort limit N (default 30; Isaac Lab's Franka 200)")
 parser.add_argument("--table_friction", type=float, default=None, help="table/obstacle friction (FurnitureSim: 0.10)")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
@@ -252,6 +254,11 @@ def main() -> None:
     if args.table_friction is not None:
         cfg.furniture.table_friction = args.table_friction
     cfg.apply_friction()
+    if args.grip_stiffness is not None:
+        cfg.furniture.gripper_stiffness = args.grip_stiffness
+    if args.grip_force is not None:
+        cfg.furniture.gripper_effort_limit = args.grip_force
+    cfg.apply_gripper()
     if args.record:
         cfg.scene.clone_in_fabric = False
         setattr(

@@ -29,6 +29,8 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--task", default="Isaac-Furniture-OneLeg-v0")
 parser.add_argument("--num_envs", type=int, default=2)
 parser.add_argument("--part_friction", type=float, default=None, help="parts' friction (FurnitureSim: 0.15)")
+parser.add_argument("--grip_stiffness", type=float, default=None, help="finger drive N/m (default 600; Isaac Lab's Franka 2000)")
+parser.add_argument("--grip_force", type=float, default=None, help="finger effort limit N (default 30; Isaac Lab's Franka 200)")
 parser.add_argument("--table_friction", type=float, default=None, help="table/obstacle friction (FurnitureSim: 0.10)")
 parser.add_argument("--steps", type=int, default=50)
 parser.add_argument("--teleport", action="store_true", help="seat leg 4 in the top, then check")
@@ -236,6 +238,11 @@ def main() -> None:
     if args.table_friction is not None:
         cfg.furniture.table_friction = args.table_friction
     cfg.apply_friction()
+    if args.grip_stiffness is not None:
+        cfg.furniture.gripper_stiffness = args.grip_stiffness
+    if args.grip_force is not None:
+        cfg.furniture.gripper_effort_limit = args.grip_force
+    cfg.apply_gripper()
     if args.contact_offset is not None or args.rest_offset is not None:
         for name in cfg.furniture.part_names:
             props = getattr(cfg.scene, name).spawn.collision_props
