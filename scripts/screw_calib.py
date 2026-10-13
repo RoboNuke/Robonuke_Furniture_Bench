@@ -211,8 +211,10 @@ def main() -> None:
     if args.top_pos:
         tx, ty = (float(v) for v in args.top_pos.split(","))
     else:
-        tx = frames.OBSTACLE_FRONT_POS[0] - frames.OBSTACLE_FRONT_SIZE[0] / 2 - TOP_HALF_WIDTH - 0.005
-        ty = frames.OBSTACLE_SIDE_POS["obstacle_left"][1] - frames.OBSTACLE_SIDE_SIZE[1] / 2 - TOP_HALF_WIDTH - 0.005
+        # the corner between the front and the left obstacle, 1 cm clear of both (where
+        # upstream's push leaves it, give or take that clearance)
+        tx = frames.OBSTACLE_FRONT_POS[0] - frames.OBSTACLE_FRONT_SIZE[0] / 2 - TOP_HALF_WIDTH - 0.01
+        ty = frames.OBSTACLE_SIDE_POS["obstacle_left"][1] - frames.OBSTACLE_SIDE_SIZE[1] / 2 - TOP_HALF_WIDTH - 0.01
     top_pos = top.data.root_pos_w[:1].clone()
     top_pos[0, 0], top_pos[0, 1] = origin[0, 0] + tx, origin[0, 1] + ty
     top_quat = top.data.root_quat_w[:1].clone()
@@ -233,14 +235,23 @@ def main() -> None:
         env.step(hold)
     seat_z_w = (top_pos + quat_apply(top_quat, rel_t - torch.tensor([[0, 0, args.seat_dz]], device=dev)))[0, 2]
     hole_w = (top.data.root_pos_w[:1] + quat_apply(top.data.root_quat_w[:1], rel_t))[0]
-    hole_b = hole_w - origin[0]  # the robot base is at the env origin
-    print(f"[screw] top at ({tx:.3f}, {ty:.3f}); hole axis at ({hole_b[0]:.4f}, {hole_b[1]:.4f}) base frame")
+    hole_b = (hole_w - origin[0]).tolist()  # the robot base is at the env origin
+    top_b = (top.data.root_pos_w[0] - origin[0]).tolist()
+    top_tilt = math.degrees(math.acos(max(-1.0, min(1.0, float(quat_apply(top.data.root_quat_w[:1], torch.tensor([[0.0, 0.0, 1.0]], device=dev))[0, 2])))))
+    print(f"[screw] top asked at ({tx:.3f}, {ty:.3f}); after settling it is at ({top_b[0]:.3f}, {top_b[1]:.3f}, {top_b[2]:.4f}), "
+          f"tilt {top_tilt:.1f} deg, yaw {math.degrees(yaw_of(top.data.root_quat_w[:1])):+.1f} deg")
+    print(f"[screw] hole axis at ({hole_b[0]:.4f}, {hole_b[1]:.4f}) base frame; leg at "
+          f"({(leg.data.root_pos_w[0, 0] - origin[0, 0]).item():.4f}, {(leg.data.root_pos_w[0, 1] - origin[0, 1]).item():.4f}, "
+          f"{(leg.data.root_pos_w[0, 2] - origin[0, 2]).item():.4f}), {leg_state()[1] * 1000:.1f} mm above the seat, tilt {leg_state()[2]:.1f} deg")
+    if abs(top_b[0] - tx) > 0.02 or abs(top_b[1] - ty) > 0.02 or top_tilt > 2.0:
+        print("[screw] WARNING: the top moved while settling (teleported into an obstacle?); use --top_pos x,y", flush=True)
 
     def leg_state():
+        hole_w_ = hole_w
         rel_pos, rel_quat = relative_pose(top.data.root_pos_w[:1], top.data.root_quat_w[:1], leg.data.root_pos_w[:1], leg.data.root_quat_w[:1])
         tilt = math.degrees(math.acos(max(-1.0, min(1.0, rotation_diag(rel_quat)[0, 2].item()))))
         above_seat = (leg.data.root_pos_w[0, 2] - seat_z_w).item()
-        off_xy = (leg.data.root_pos_w[0, :2] - hole_w[:2]).norm().item()
+        off_xy = (leg.data.root_pos_w[0, :2] - hole_w_[:2]).norm().item()
         return yaw_of(leg.data.root_quat_w[:1]), above_seat, tilt, off_xy
 
     # -- the grasp yaw: pads flat on a face (hand yaw = face yaw + k*90) and joint 7 nearest its -limit
@@ -293,7 +304,7 @@ def main() -> None:
                 return True
         return False
 
-    hole_xy = hole_b[:2]
+    hole_xy = (float(hole_b[0]), float(hole_b[1]))
     gq = down_quat(grasp_yaw, dev)
 
     def above_fn(_):
@@ -310,7 +321,12 @@ def main() -> None:
     run("descend", args.descend_time, descend_fn, +1.0)
     run("close", args.close_time, grasp_fn, -1.0)
     marks["grasp"] = (hand_yaw_u, leg_yaw_u, leg_state()[1], q7())
-    print(f"[screw] grasped: width {width():.4f} m (leg is 0.030), q7 {q7():+.3f}")
+    ee_p, _ = ee_pose_b(env)
+    print(f"[screw] after close: width {width():.4f} m (the leg is 0.030; > 0.04 = missed it), TCP "
+          f"({ee_p[0, 0]:.4f}, {ee_p[0, 1]:.4f}, {ee_p[0, 2]:.4f}) vs hole ({hole_xy[0]:.4f}, {hole_xy[1]:.4f}), "
+          f"leg tilt {leg_state()[2]:.1f} deg, q7 {q7():+.3f}", flush=True)
+    if width() > 0.04:
+        print("[screw] GRASP MISSED -- the screw that follows means nothing; check the TCP-vs-hole offset above", flush=True)
 
     omega = math.radians(args.rot_speed)
 
@@ -318,10 +334,21 @@ def main() -> None:
         z = grasp_z - args.down_speed * tp - args.press
         return torch.tensor([hole_xy[0], hole_xy[1], z], device=dev), down_quat(grasp_yaw - omega * tp, dev)
 
-    def screw_stop():
-        return q7() >= Q7_MAX - args.q7_margin or assembled_now(env)
+    asm_streak = [0]
+    why = ["time"]
 
-    stopped = run("screw", args.screw_time, screw_fn, -1.0, screw_stop)
+    def screw_stop():
+        asm_streak[0] = asm_streak[0] + 1 if assembled_now(env) else 0
+        if q7() >= Q7_MAX - args.q7_margin:
+            why[0] = "joint 7 at its limit margin"
+            return True
+        if asm_streak[0] >= 10:  # the FurnitureBench check holding for half a second
+            why[0] = "assembled (held 10 steps)"
+            return True
+        return False
+
+    run("screw", args.screw_time, screw_fn, -1.0, screw_stop)
+    print(f"[screw] screw phase ended: {why[0]}", flush=True)
     marks["end"] = (hand_yaw_u, leg_yaw_u, leg_state()[1], q7())
 
     # -- summary
@@ -336,7 +363,7 @@ def main() -> None:
     print(f"[screw] leg went down {(up0 - up1) * 1000:5.1f} mm: {up0 * 1000:5.1f} -> {up1 * 1000:5.1f} mm above the seat"
           + (f"  ({(up0 - up1) * 1000 / (leg_turn / 360):.2f} mm per leg turn)" if abs(leg_turn) > 30 else ""))
     print(f"[screw] final tilt {tilt:.1f} deg, hole offset {off * 1000:.1f} mm, width {width():.4f}, assembled {assembled_now(env)}, "
-          f"stopped by {'limit/assembled' if stopped else 'time'}")
+          f"ended by: {why[0]}")
     if args.csv:
         with open(args.csv, "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
@@ -350,5 +377,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
-    app.close()
+    try:
+        main()
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+        sys.stdout.flush()
+        raise
+    finally:
+        app.close()
