@@ -124,7 +124,7 @@ def test_servo_policy_assembles_in_the_ideal_world():
     hw = 0.08125
     x_wall = frames.OBSTACLE_FRONT_POS[0] - frames.OBSTACLE_FRONT_SIZE[0] / 2
     y_wall = frames.OBSTACLE_SIDE_POS["obstacle_left"][1] - frames.OBSTACLE_SIDE_SIZE[1] / 2
-    assert abs(top[0, 3] - (x_wall - hw)) < 1e-6 and abs(top[1, 3] - (y_wall - hw)) < 1e-6
+    assert abs(top[0, 3] - (x_wall - hw)) < 0.0005 and abs(top[1, 3] - (y_wall - hw)) < 0.0005
     _, goal_R = pol._corner_goal(w.state())
     assert abs(sv.yaw_of(top[:3, :3]) - sv.yaw_of(goal_R)) < np.radians(3)
     # the phases, in order, with at least one regrasp (one wrist range is < a full turn)

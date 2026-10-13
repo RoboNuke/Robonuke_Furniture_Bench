@@ -292,7 +292,7 @@ class ServoOneLegPolicy:
             goal_pos[2] = ee_pos[2]  # slide it: no lift, no press
             # done when it is there, or when the walls stop it (the goal is inside them)
             at_goal = ep < 0.004 and er < np.radians(2.0)
-            against_wall = self._stalled(np.array([T_top[0, 3], T_top[1, 3], 0.1 * yaw_of(T_top[:3, :3])]), 5, 0.001) and ep < 0.015
+            against_wall = self._stalled(np.array([T_top[0, 3], T_top[1, 3], 0.1 * yaw_of(T_top[:3, :3])]), 5, 0.0003) and ep < 0.015
             if at_goal or against_wall:
                 self.hold_pose = hom(ee_R, ee_pos)
                 self.gripper = -1.0
