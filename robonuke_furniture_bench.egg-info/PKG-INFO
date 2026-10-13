@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: robonuke-furniture-bench
+Version: 0.1.0
+Summary: FurnitureBench (square table / one_leg) ported to Isaac Lab as a manager-based env on robonuke_rl_core
+Requires-Python: >=3.11
+Requires-Dist: numpy
+Requires-Dist: pyyaml

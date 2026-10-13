@@ -24,6 +24,11 @@ from .mdp.state import tracker
 class AssemblyEnv(ManagerBasedRLEnv):
     def __init__(self, cfg, render_mode: str | None = None, **kwargs):
         self._episode_success = None
+        # furniture.part_friction / table_friction / gripper_* are plain fields a config file
+        # can override after the cfg's __post_init__ ran; push them into the event terms and
+        # the actuator here, where the scene has not been built yet
+        cfg.apply_friction()
+        cfg.apply_gripper()
         super().__init__(cfg, render_mode, **kwargs)
         self._episode_success = torch.zeros(self.num_envs, device=self.device)
 

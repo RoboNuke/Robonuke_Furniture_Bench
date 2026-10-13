@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "robonuke-furniture-bench"
+version = "0.1.0"
+description = "FurnitureBench (square table / one_leg) ported to Isaac Lab as a manager-based env on robonuke_rl_core"
+requires-python = ">=3.11"
+dependencies = ["numpy", "pyyaml"]
+
+[tool.setuptools.packages.find]
+include = ["furniture_lab*"]
+
+# Install EDITABLE (pip install -e .): the asset catalog resolves assets/ relative to the
+# package's location in this checkout, so a copy of the package alone has no assets.

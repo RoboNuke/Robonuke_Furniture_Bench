@@ -21,6 +21,10 @@ upstream and what is this port's choice.
 
 ## Setup
 
+```bash
+pip install -e .   # editable: the asset catalog resolves assets/ from this checkout
+```
+
 1. The package, installed once into the Isaac Lab env (Isaac Lab 0.47.1 / Isaac Sim 5.1 /
    Python 3.11 -- **not** the Python 3.8 Isaac Gym env):
 
