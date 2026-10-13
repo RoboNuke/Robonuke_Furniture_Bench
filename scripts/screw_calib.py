@@ -236,6 +236,15 @@ def main() -> None:
     seat_z_w = (top_pos + quat_apply(top_quat, rel_t - torch.tensor([[0, 0, args.seat_dz]], device=dev)))[0, 2]
     hole_w = (top.data.root_pos_w[:1] + quat_apply(top.data.root_quat_w[:1], rel_t))[0]
     hole_b = (hole_w - origin[0]).tolist()  # the robot base is at the env origin
+
+    def leg_state():
+        hole_w_ = hole_w
+        rel_pos, rel_quat = relative_pose(top.data.root_pos_w[:1], top.data.root_quat_w[:1], leg.data.root_pos_w[:1], leg.data.root_quat_w[:1])
+        tilt = math.degrees(math.acos(max(-1.0, min(1.0, rotation_diag(rel_quat)[0, 2].item()))))
+        above_seat = (leg.data.root_pos_w[0, 2] - seat_z_w).item()
+        off_xy = (leg.data.root_pos_w[0, :2] - hole_w_[:2]).norm().item()
+        return yaw_of(leg.data.root_quat_w[:1]), above_seat, tilt, off_xy
+
     top_b = (top.data.root_pos_w[0] - origin[0]).tolist()
     top_tilt = math.degrees(math.acos(max(-1.0, min(1.0, float(quat_apply(top.data.root_quat_w[:1], torch.tensor([[0.0, 0.0, 1.0]], device=dev))[0, 2])))))
     print(f"[screw] top asked at ({tx:.3f}, {ty:.3f}); after settling it is at ({top_b[0]:.3f}, {top_b[1]:.3f}, {top_b[2]:.4f}), "
@@ -246,13 +255,6 @@ def main() -> None:
     if abs(top_b[0] - tx) > 0.02 or abs(top_b[1] - ty) > 0.02 or top_tilt > 2.0:
         print("[screw] WARNING: the top moved while settling (teleported into an obstacle?); use --top_pos x,y", flush=True)
 
-    def leg_state():
-        hole_w_ = hole_w
-        rel_pos, rel_quat = relative_pose(top.data.root_pos_w[:1], top.data.root_quat_w[:1], leg.data.root_pos_w[:1], leg.data.root_quat_w[:1])
-        tilt = math.degrees(math.acos(max(-1.0, min(1.0, rotation_diag(rel_quat)[0, 2].item()))))
-        above_seat = (leg.data.root_pos_w[0, 2] - seat_z_w).item()
-        off_xy = (leg.data.root_pos_w[0, :2] - hole_w_[:2]).norm().item()
-        return yaw_of(leg.data.root_quat_w[:1]), above_seat, tilt, off_xy
 
     # -- the grasp yaw: pads flat on a face (hand yaw = face yaw + k*90) and joint 7 nearest its -limit
     hand_yaw0 = yaw_of(ee_pose_b(env)[1])
