@@ -110,6 +110,8 @@ class FurnitureCfg:
     #: the mesh frame the part USDs use (from the catalog); the scene's reset orientations
     #: and the assembled targets are both expressed in it
     mesh_frame: str = mesh_frame()
+    #: upstream's numbers, per axis of the top's OBJ frame (y = seat axis, 5 mm); the tracker
+    #: carries them into ``mesh_frame`` (uwlab: z is the seat axis)
     assembled_pos_threshold: Tuple[float, float, float] = ASSEMBLED_POS_THRESHOLD
     ori_bound: float = ORI_BOUND
     #: print a line on every reset (which envs, after how many steps, which termination

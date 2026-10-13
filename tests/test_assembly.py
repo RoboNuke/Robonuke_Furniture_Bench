@@ -195,3 +195,29 @@ def test_quat_mul_is_rotation_composition():
         Ra, Rb = _pose_mat(np.zeros(3), qa)[:3, :3], _pose_mat(np.zeros(3), qb)[:3, :3]
         q = quat_mul(torch.tensor(qa), torch.tensor(qb)).numpy()
         assert np.allclose(_pose_mat(np.zeros(3), q)[:3, :3], Ra @ Rb, atol=1e-10)
+
+
+def test_seat_tolerance_follows_the_mesh_frame():
+    """Upstream's (10, 5, 10) mm is in OBJ axes, y = seat axis. In the uwlab frame the seat
+    axis is z, so the 5 mm must land there: a leg 8 mm up on the thread stop is NOT assembled."""
+    import numpy as np
+    import torch
+
+    from furniture_lab.tasks.furniture import square_table as st
+    from furniture_lab.tasks.furniture.assembly import pairs_assembled
+
+    assert np.allclose(st.pos_threshold_in("obj"), (0.010, 0.005, 0.010))
+    assert np.allclose(st.pos_threshold_in("uwlab"), (0.010, 0.010, 0.005))
+    targets = torch.as_tensor(st.rel_pose_targets([(0, 4)], "uwlab"))
+    thr = torch.as_tensor(st.pos_threshold_in("uwlab"), dtype=torch.float32)
+    pairs = torch.tensor([[0, 4]])
+    ident = torch.tensor([1.0, 0, 0, 0])
+    for dz_mm, expect in ((0.0, True), (4.0, True), (8.0, False)):
+        pos = torch.zeros(1, 5, 3)
+        pos[0, 4] = targets[0, 0] + torch.tensor([0.0, 0.0, dz_mm / 1000])
+        quat = ident.expand(1, 5, 4).clone()
+        assert bool(pairs_assembled(pos, quat, pairs, targets, thr, 0.94)[0, 0]) is expect, dz_mm
+    # and the loose axis is in the plane: 8 mm sideways still counts
+    pos = torch.zeros(1, 5, 3)
+    pos[0, 4] = targets[0, 0] + torch.tensor([0.008, 0.0, 0.0])
+    assert bool(pairs_assembled(pos, ident.expand(1, 5, 4).clone(), pairs, targets, thr, 0.94)[0, 0])

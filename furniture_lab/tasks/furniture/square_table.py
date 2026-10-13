@@ -34,6 +34,7 @@ __all__ = [
     "ONE_LEG_PAIRS",
     "SQUARE_TABLE_PAIRS",
     "ASSEMBLED_POS_THRESHOLD",
+    "pos_threshold_in",
     "ORI_BOUND",
     "PART_FRICTION",
     "TABLE_FRICTION",
@@ -91,9 +92,10 @@ ASSEMBLED_REL_POSES: Dict[Tuple[int, int], np.ndarray] = {(0, j): _HOLES for j i
 ONE_LEG_PAIRS: List[Tuple[int, int]] = [(0, 4)]
 SQUARE_TABLE_PAIRS: List[Tuple[int, int]] = [(0, 4), (0, 3), (0, 1), (0, 2)]
 
-#: ``config["furniture"]["assembled_pos_threshold"]`` (per axis of the top's frame) and
+#: ``config["furniture"]["assembled_pos_threshold"]`` (per axis of the top's **OBJ** frame,
+#: whose y is the thickness / seat axis: 5 mm of seat depth, 10 mm in the plane) and
 #: ``Furniture.ori_bound``: each column of the relative rotation must have cosine >= 0.94
-#: (about 20 deg) with the identity's
+#: (about 20 deg) with the identity's. Use :func:`pos_threshold_in` for another mesh frame.
 ASSEMBLED_POS_THRESHOLD = (0.010, 0.005, 0.010)
 ORI_BOUND = 0.94
 
@@ -146,6 +148,14 @@ def pairs_for(task: str) -> List[Tuple[int, int]]:
     if task == "square_table":
         return list(SQUARE_TABLE_PAIRS)
     raise ValueError(f"unknown furniture task {task!r}; expected 'one_leg' or 'square_table'")
+
+
+def pos_threshold_in(frame: Optional[str] = None, threshold: Sequence[float] = ASSEMBLED_POS_THRESHOLD) -> np.ndarray:
+    """Upstream's per-axis tolerance, given in the OBJ frame's axes, carried to ``frame``'s:
+    the axes are permuted by the frame rotation, so the 5 mm stays on the seat axis (OBJ y,
+    uwlab z) and the 10 mm on the in-plane ones."""
+    R = MESH_FRAMES[frame or mesh_frame()]
+    return np.abs(R @ np.asarray(threshold, dtype=np.float64))
 
 
 def rel_pose_targets(pairs: Sequence[Tuple[int, int]], frame: Optional[str] = None) -> np.ndarray:

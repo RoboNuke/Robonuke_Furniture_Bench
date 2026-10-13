@@ -17,7 +17,7 @@ import torch
 from isaaclab.utils.math import subtract_frame_transforms
 
 from ...furniture.assembly import AssemblyTracker
-from ...furniture.square_table import pairs_for, rel_pose_targets
+from ...furniture.square_table import pairs_for, pos_threshold_in, rel_pose_targets
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -58,7 +58,7 @@ def tracker(env: "ManagerBasedRLEnv") -> AssemblyTracker:
             env.num_envs,
             pairs,
             torch.as_tensor(rel_pose_targets(pairs, fcfg.mesh_frame)),
-            fcfg.assembled_pos_threshold,
+            pos_threshold_in(fcfg.mesh_frame, fcfg.assembled_pos_threshold),  # OBJ axes -> this frame's
             fcfg.ori_bound,
             env.device,
         )
