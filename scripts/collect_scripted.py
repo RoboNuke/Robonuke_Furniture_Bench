@@ -18,9 +18,9 @@ upstream's ``scripted_timeout`` of 600 steps (failure). With ``--record`` every 
 filmed: a success keeps its video beside its pkl, a failure keeps it under ``fails/`` only
 with ``--save_failure``.
 
-Not headless, the viewport window takes two keys (click it first so it has focus):
-``F`` ends the current rollout at once and files it as a failure, ``Q`` stops collecting
-after the current attempt is filed.
+To end a rollout early as a failure: ``X`` in the viewport window (click it first so it has
+focus) or ``f`` + Enter in the terminal; ``Escape`` in the viewport or ``q`` + Enter in the
+terminal stops collecting after the current attempt is filed.
 """
 
 import argparse
@@ -121,34 +121,52 @@ class Recorder:
 
 
 class AbortKeys:
-    """``F`` / ``Q`` in the viewport window (no-op when headless or without a window)."""
+    """End a rollout early (filed as a failure) or stop collecting.
+
+    Two routes: in the viewport window (click it first), ``X`` aborts and ``Escape`` stops after
+    the current attempt -- keys Kit leaves unbound (``F`` is "frame selection", which flies the
+    camera into the table, ``Q`` the select tool); or in the terminal, type ``f`` / ``q`` and
+    Enter. Headless only the terminal route exists."""
 
     def __init__(self) -> None:
         self.abort = False
         self.quit = False
         self._sub = None
-        if args.headless:
-            return
-        try:
-            import carb
-            import omni.appwindow
+        if not args.headless:
+            try:
+                import carb
+                import omni.appwindow
 
-            window = omni.appwindow.get_default_app_window()
-            keyboard = window.get_keyboard() if hasattr(window, "get_keyboard") else window.getKeyboard()
-            self._input = carb.input.acquire_input_interface()
-            self._press = carb.input.KeyboardEventType.KEY_PRESS
-            self._sub = self._input.subscribe_to_keyboard_events(keyboard, self._on_key)
-            print("[collect] keys (viewport focused): F = abort rollout as a failure, Q = stop after this attempt", flush=True)
-        except Exception as e:  # no window, different carb API ...
-            print(f"[collect] abort keys unavailable: {e}", flush=True)
+                window = omni.appwindow.get_default_app_window()
+                keyboard = window.get_keyboard() if hasattr(window, "get_keyboard") else window.getKeyboard()
+                self._input = carb.input.acquire_input_interface()
+                self._press = carb.input.KeyboardEventType.KEY_PRESS
+                self._sub = self._input.subscribe_to_keyboard_events(keyboard, self._on_key)
+                print("[collect] viewport keys (click it first): X = abort rollout as a failure, Esc = stop after this attempt", flush=True)
+            except Exception as e:  # no window, different carb API ...
+                print(f"[collect] viewport abort keys unavailable: {e}", flush=True)
+        if sys.stdin is not None and sys.stdin.isatty():
+            import threading
+
+            threading.Thread(target=self._stdin_loop, daemon=True).start()
+            print("[collect] terminal keys: type f + Enter = abort rollout as a failure, q + Enter = stop after this attempt", flush=True)
 
     def _on_key(self, event, *_args, **_kwargs) -> bool:
         if event.type == self._press:
-            if event.input.name == "F":
+            name = event.input.name
+            if name == "X":
                 self.abort = True
-            elif event.input.name == "Q":
+            elif name == "ESCAPE":
                 self.quit = True
         return True
+
+    def _stdin_loop(self) -> None:
+        for line in sys.stdin:
+            cmd = line.strip().lower()
+            if cmd == "f":
+                self.abort = True
+            elif cmd == "q":
+                self.quit = True
 
     def new_attempt(self) -> None:
         self.abort = False
