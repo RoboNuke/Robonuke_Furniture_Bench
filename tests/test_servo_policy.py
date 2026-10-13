@@ -78,6 +78,12 @@ class IdealWorld:
             T_new = new @ np.linalg.inv(old) @ T
             if self.held == "square_table_top":
                 T_new[2, 3] = T[2, 3]  # slides on the table
+                # the walls: the front and left obstacles' inner faces stop a square top
+                hw = 0.08125
+                x_wall = frames.OBSTACLE_FRONT_POS[0] - frames.OBSTACLE_FRONT_SIZE[0] / 2
+                y_wall = frames.OBSTACLE_SIDE_POS["obstacle_left"][1] - frames.OBSTACLE_SIDE_SIZE[1] / 2
+                T_new[0, 3] = min(T_new[0, 3], x_wall - hw)
+                T_new[1, 3] = min(T_new[1, 3], y_wall - hw)
             self.parts[self.held] = T_new
         # the leg on its thread
         leg = self.parts["square_table_leg4"]
@@ -113,10 +119,13 @@ def test_servo_policy_assembles_in_the_ideal_world():
         w.step(a)
     assert a.done, f"not done after {i} steps, phase {pol.phase}, phases {phases}"
     assert pol.assembled(w.state())
-    # the top was placed, not pushed into the obstacle: at the corner goal, right yaw
+    # the top ends against both walls (the goal is 2 mm inside them), square
     top = w.parts["square_table_top"]
-    goal_pos, goal_R = pol._corner_goal(w.state())
-    assert np.linalg.norm(top[:2, 3] - goal_pos[:2]) < 0.005
+    hw = 0.08125
+    x_wall = frames.OBSTACLE_FRONT_POS[0] - frames.OBSTACLE_FRONT_SIZE[0] / 2
+    y_wall = frames.OBSTACLE_SIDE_POS["obstacle_left"][1] - frames.OBSTACLE_SIDE_SIZE[1] / 2
+    assert abs(top[0, 3] - (x_wall - hw)) < 1e-6 and abs(top[1, 3] - (y_wall - hw)) < 1e-6
+    _, goal_R = pol._corner_goal(w.state())
     assert abs(sv.yaw_of(top[:3, :3]) - sv.yaw_of(goal_R)) < np.radians(3)
     # the phases, in order, with at least one regrasp (one wrist range is < a full turn)
     want = ["top_free", "top_servo", "top_release", "top_up", "leg_free", "leg_lift", "leg_upright", "leg_over",

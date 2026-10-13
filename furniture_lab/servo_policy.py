@@ -7,8 +7,10 @@ as the fingers hold something the command comes from that object's pose error:
 * the hand goal is the object's saturated-P step carried through the grasp as a rigid
   transform -- translation passes straight through, a rotation of the object about its own
   centre makes the TCP orbit (:class:`ObjectServo`);
-* the table top is slid to a target pose in the corner (position and yaw), not pushed
-  until a timer runs out;
+* the table top is slid into the corner against both walls (the goal sits 2 mm inside
+  them, so contact squares it) and released when it stops moving;
+* phases hand over on error (position, tilt, the leg's own height or yaw no longer
+  changing, the gripper's width), never on a step count; only the episode has a clock;
 * the leg is lifted upright, carried over the hole, lowered until its own height stops
   changing, settled and released -- its axis is held vertical the whole way;
 * screwing: the leg's goal is upright, on the hole axis, with its yaw led by at most
@@ -168,7 +170,7 @@ class ServoOneLegPolicy:
         lead_deg: float = 10.0,
         press: float = 0.003,
         insert_rate: float = 0.002,
-        corner_clearance: float = 0.005,
+        corner_clearance: float = -0.002,
         hover_dz: float = 0.04,
         q7_margin: float = 0.08,
         wind_step_deg: float = 9.0,
@@ -197,6 +199,7 @@ class ServoOneLegPolicy:
         self._leg_yaw_u: Optional[float] = None
         self._yaw_hist: list = []
         self._assembled_streak = 0
+        self._track: list = []
         self.steps = 0
         self.done = False
 
@@ -214,6 +217,15 @@ class ServoOneLegPolicy:
         self.phase_steps = 0
         self._leg_z_hist = []
         self._yaw_hist = []
+        self._track = []
+
+    def _stalled(self, x: np.ndarray, steps: int, eps: float) -> bool:
+        """``x`` (a vector of what should still be moving) has changed by less than ``eps``
+        over the last ``steps`` steps -- contact, or converged."""
+        self._track.append(np.asarray(x, dtype=np.float64).copy())
+        if len(self._track) <= steps:
+            return False
+        return bool(np.linalg.norm(self._track[-1] - self._track[-1 - steps]) < eps)
 
     # -- geometry ------------------------------------------------------------------
     def _poses(self, s: ScriptedState):
@@ -225,8 +237,9 @@ class ServoOneLegPolicy:
         return T_top, T_leg, seat
 
     def _corner_goal(self, s: ScriptedState) -> Tuple[np.ndarray, np.ndarray]:
-        """The top against the front and left obstacles with ``corner_clearance``, at its
-        nominal reset yaw (upstream's reset orientation, without the reset noise)."""
+        """The top against the front and left obstacles (``corner_clearance`` < 0 puts the goal
+        inside the walls, so it is pushed into contact and squared by them), at its nominal
+        reset yaw (upstream's reset orientation, without the reset noise)."""
         x = frames.OBSTACLE_FRONT_POS[0] - frames.OBSTACLE_FRONT_SIZE[0] / 2 - self.TOP_HALF_WIDTH - self.corner_clearance
         y = frames.OBSTACLE_SIDE_POS["obstacle_left"][1] - frames.OBSTACLE_SIDE_SIZE[1] / 2 - self.TOP_HALF_WIDTH - self.corner_clearance
         T_top, _, _ = self._poses(s)
@@ -277,20 +290,23 @@ class ServoOneLegPolicy:
             tgt_pos, tgt_R = self._corner_goal(s)
             goal_pos, goal_R, ep, er = self.servo.step(T_top[:3, 3], T_top[:3, :3], tgt_pos, tgt_R, ee_pos, ee_R)
             goal_pos[2] = ee_pos[2]  # slide it: no lift, no press
-            if (ep < 0.004 and er < np.radians(2.0)) or self.phase_steps >= 80:
+            # done when it is there, or when the walls stop it (the goal is inside them)
+            at_goal = ep < 0.004 and er < np.radians(2.0)
+            against_wall = self._stalled(np.array([T_top[0, 3], T_top[1, 3], 0.1 * yaw_of(T_top[:3, :3])]), 5, 0.001) and ep < 0.015
+            if at_goal or against_wall:
                 self.hold_pose = hom(ee_R, ee_pos)
                 self.gripper = -1.0
                 self._goto("top_release")
                 skill_complete = 1
         elif self.phase == "top_release":
             goal_pos, goal_R = self.hold_pose[:3, 3].copy(), self.hold_pose[:3, :3].copy()
-            if s.gripper_width >= MAX_GRIPPER_WIDTH - 0.001 or self.phase_steps >= 10:
+            if s.gripper_width >= MAX_GRIPPER_WIDTH - 0.001:
                 self._goto("top_up")
         elif self.phase == "top_up":
             goal_pos = self.hold_pose[:3, 3].copy()
             goal_pos[2] = 0.10
             goal_R = self.hold_pose[:3, :3].copy()
-            if abs(ee_pos[2] - 0.10) < 0.01 or self.phase_steps >= 25:
+            if abs(ee_pos[2] - 0.10) < 0.01:
                 self.leg.reset()
                 self.leg._state = "reach_leg_floor_xy"
                 self.leg.gripper_action = -1
@@ -310,19 +326,19 @@ class ServoOneLegPolicy:
             # straight up, orientation as grasped (upstream lifts before it turns the leg)
             tgt = np.array([leg_pos[0], leg_pos[1], seat[2] + 0.10])
             goal_pos, goal_R, ep, er = self.servo.step(leg_pos, leg_R, tgt, leg_R, ee_pos, ee_R)
-            if ep < 0.01 or self.phase_steps >= 40:
+            if ep < 0.01:
                 self._goto("leg_upright")
         elif self.phase == "leg_upright":
             # stand it up in the air: axis vertical, bolt down, by the smallest rotation
             tgt = np.array([leg_pos[0], leg_pos[1], seat[2] + 0.10])
             goal_pos, goal_R, ep, er = self.servo.step(leg_pos, leg_R, tgt, upright_goal(leg_R), ee_pos, ee_R)
-            if (ep < 0.01 and leg_tilt_deg(leg_R) < 3.0) or self.phase_steps >= 60:
+            if ep < 0.01 and leg_tilt_deg(leg_R) < 3.0:
                 self._goto("leg_over")
         elif self.phase == "leg_over":
             # bolt tip just above the hole: origin at seat + 30 mm (bolt is 25.4 mm long)
             tgt = np.array([seat[0], seat[1], seat[2] + 0.030])
             goal_pos, goal_R, ep, er = self.servo.step(leg_pos, leg_R, tgt, upright_goal(leg_R), ee_pos, ee_R)
-            if (ep < 0.002 and leg_tilt_deg(leg_R) < 2.0) or self.phase_steps >= 120:
+            if ep < 0.002 and leg_tilt_deg(leg_R) < 2.0:
                 self._goto("leg_lower")
         elif self.phase == "leg_lower":
             # down at insert_rate until the leg's own height stops changing (the thread holds it)
@@ -331,18 +347,19 @@ class ServoOneLegPolicy:
             tgt = np.array([seat[0], seat[1], z_cmd])
             goal_pos, goal_R, ep, er = self.servo.step(leg_pos, leg_R, tgt, upright_goal(leg_R), ee_pos, ee_R)
             h = self._leg_z_hist
-            stopped = len(h) > 3 and (h[-4] - h[-1]) < 0.0005
-            if stopped or leg_pos[2] <= seat[2] + 0.0031 or self.phase_steps >= 40:
+            stopped = len(h) > 3 and (h[-4] - h[-1]) < 0.0005  # the thread holds it
+            if stopped or leg_pos[2] <= seat[2] + 0.0031:
                 self.hold_pose = hom(ee_R, ee_pos)
                 self._goto("leg_settle")
         elif self.phase == "leg_settle":
+            # hold until the leg has stopped moving (position and axis), then let go
             goal_pos, goal_R = self.hold_pose[:3, 3].copy(), self.hold_pose[:3, :3].copy()
-            if self.phase_steps >= 5:
+            if self._stalled(np.concatenate([leg_pos, 0.05 * leg_R[:, 1]]), 3, 0.0005):
                 self.gripper = -1.0
                 self._goto("leg_release")
         elif self.phase == "leg_release":
             goal_pos, goal_R = self.hold_pose[:3, 3].copy(), self.hold_pose[:3, :3].copy()
-            if s.gripper_width >= MAX_GRIPPER_WIDTH - 0.001 or self.phase_steps >= 10:
+            if s.gripper_width >= MAX_GRIPPER_WIDTH - 0.001:
                 self._start_regrasp()
 
         # ---------------------------------------------------------------- the leg: screw
@@ -366,13 +383,13 @@ class ServoOneLegPolicy:
             h = self._yaw_hist
             stalled = len(h) > 8 and (h[-9] - h[-1]) < np.radians(2.0)  # < 2 deg in 8 steps
             at_limit = q7 >= self.leg.Q7_MAX - self.leg.q7_margin
-            if at_limit or stalled or self.phase_steps >= 120:
+            if at_limit or stalled:
                 self.hold_pose = hom(ee_R, ee_pos)
                 self.gripper = -1.0
                 self._goto("screw_release")
         elif self.phase == "screw_release":
             goal_pos, goal_R = self.hold_pose[:3, 3].copy(), self.hold_pose[:3, :3].copy()
-            if s.gripper_width >= MAX_GRIPPER_WIDTH - 0.001 or self.phase_steps >= 10:
+            if s.gripper_width >= MAX_GRIPPER_WIDTH - 0.001:
                 self._start_regrasp()
 
         # ---------------------------------------------------------------- the end
@@ -380,7 +397,7 @@ class ServoOneLegPolicy:
             goal_pos = self.hold_pose[:3, 3].copy()
             goal_pos[2] = 0.15
             goal_R = self.hold_pose[:3, :3].copy()
-            if abs(ee_pos[2] - 0.15) < 0.01 or self.phase_steps >= 30:
+            if abs(ee_pos[2] - 0.15) < 0.01:
                 self._goto("done")
                 self.done = True
         elif self.phase == "done":
