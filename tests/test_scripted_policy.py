@@ -55,6 +55,9 @@ def test_assembled_ends_with_move_neutral_then_done():
     s = _state(ee_pos=(0.5, 0.0, 0.05))
     top = s.parts_tag["square_table_top"]
     s.parts_tag["square_table_leg4"] = top @ sp.get_mat([-0.05625, 0.046875, -0.05625], [0, 0, 0])
+    for _ in range(pol.assembled_hold_steps - 1):  # the check has to hold, not just fire once
+        a = pol.act(s)
+        assert not a.assembled
     a = pol.act(s)
     assert a.assembled and a.skill_complete == 1 and not a.done
     a = pol.act(s)
@@ -80,3 +83,36 @@ def test_pre_assembly_advances_under_ideal_tracking():
             break
     assert seen[:6] == ["reach_body_grasp_xy", "reach_body_grasp_z", "pick_body", "push", "release", "go_up"]
     assert pol.top.pre_assemble_done
+
+
+def test_insert_screw_turns_about_the_hole_before_release():
+    """The twist target is a rotation about the hole's vertical axis (the EE stays on its
+    circle around the hole, 5 mm lower, yawed -90 deg), and the state leads to insert_release;
+    start_twist 0 skips it (upstream's sequence)."""
+    pol = sp.OneLegScriptedPolicy(seed=0, noise=False)
+    leg = pol.leg
+    assert leg.insert_height == 0.072 and leg.start_twist_deg == 90.0
+    s = _state(ee_pos=(0.45, 0.03, 0.09))
+    hole = (sp.APRIL_TO_ROBOT @ s.parts_tag["square_table_top"] @ leg.default_assembled_pose)[:3, 3]
+    leg._state = "insert_screw"
+    leg.first_setting_target = True
+    leg.gripper_action = 1  # as pick_leg left it
+    goal_pos, goal_rot, gripper, _ = leg.fsm_step(s, "square_table_top")
+    assert gripper == 1  # the state does not open the hand
+    assert abs(np.linalg.norm(s.ee_pos[:2] - hole[:2]) - np.linalg.norm(goal_pos[:2] - hole[:2])) < 1e-9
+    assert abs(goal_pos[2] - (s.ee_pos[2] - 0.005)) < 1e-9
+    yaw = np.degrees(np.arctan2(goal_rot[1, 0], goal_rot[0, 0]) - np.arctan2(s.ee_rot[1, 0], s.ee_rot[0, 0]))
+    assert abs(((yaw + 180) % 360) - 180 + 90.0) < 1e-6
+    # reaching the target advances to the release
+    s.ee_pos, s.ee_rot = goal_pos.copy(), goal_rot.copy()
+    leg.fsm_step(s, "square_table_top")
+    assert leg._state == "insert_release"
+    # upstream's sequence with the twist off
+    leg0 = sp.OneLegScriptedPolicy(seed=0, noise=False, start_twist_deg=0.0).leg
+    leg0._state = "insert_wait"
+    leg0.first_setting_target = True
+    states = []
+    for _ in range(12):  # insert_wait has max_len 10
+        leg0.fsm_step(s, "square_table_top")
+        states.append(leg0._state)
+    assert "insert_release" in states and "insert_screw" not in states

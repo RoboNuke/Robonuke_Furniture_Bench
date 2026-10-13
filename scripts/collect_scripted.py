@@ -35,6 +35,9 @@ parser.add_argument("--out_dir", type=str, default="fb_demos")
 parser.add_argument("--num_demos", type=int, default=1)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--no_noise", action="store_true", help="disable upstream's target/action noise")
+parser.add_argument("--hold_steps", type=int, default=10, help="steps the assembled check must hold to count")
+parser.add_argument("--insert_height", type=float, default=0.072, help="leg centre above the top's tag z before release (upstream 0.084)")
+parser.add_argument("--start_twist", type=float, default=90.0, help="deg of thread-starting twist while still grasped (0 = upstream)")
 parser.add_argument("--timeout", type=int, default=600, help="upstream's scripted_timeout for one_leg")
 parser.add_argument("--save_failure", action="store_true", help="keep failed attempts (pkl + video) under fails/")
 parser.add_argument("--record", action="store_true", help="film every attempt (headless ok)")
@@ -65,7 +68,8 @@ from robonuke_rl_core.recording import VideoWriter, read_camera_rgb  # noqa: E40
 from furniture_lab import scripted_policy as sp  # noqa: E402
 from furniture_lab.tasks.assembly.assembly_env import AssemblyEnv  # noqa: E402
 from furniture_lab.tasks.assembly.assembly_env_cfg import EE_OFFSET  # noqa: E402
-from furniture_lab.tasks.assembly.mdp.state import tracker  # noqa: E402
+from furniture_lab.tasks.assembly.mdp.state import parts_pose_w, tracker  # noqa: E402
+from furniture_lab.tasks.furniture.assembly import pairs_assembled  # noqa: E402
 from furniture_lab.tasks.assembly.replay_env_cfg import OneLegReplayRelCfg  # noqa: E402
 from furniture_lab.tasks.furniture import frames  # noqa: E402
 from furniture_lab.tasks.furniture.square_table import MESH_FRAMES  # noqa: E402
@@ -108,6 +112,13 @@ class Recorder:
     def close(self) -> None:
         self.writer.close()
         print(f"[collect] wrote {self.writer.path}: {self.frames} frames at {args.fps} fps", flush=True)
+
+
+def assembled_now(env) -> bool:
+    """FurnitureBench's assembled rule on the current poses (the env's tracker is a latch)."""
+    tr = tracker(env)
+    pos, quat = parts_pose_w(env)
+    return bool(pairs_assembled(pos, quat, tr.pairs, tr.targets, tr.pos_threshold, tr.ori_bound)[0, 0].item())
 
 
 # ------------------------------------------------------------------------------ state out
@@ -222,7 +233,13 @@ def main() -> None:
             env.step(zero)  # let the parts settle after the reset
         tmp_video = out_root / f".attempt{attempt}.mp4"
         recorder = Recorder(env, tmp_video) if args.record else None
-        policy = sp.OneLegScriptedPolicy(seed=args.seed + attempt - 1, noise=not args.no_noise)
+        policy = sp.OneLegScriptedPolicy(
+            seed=args.seed + attempt - 1,
+            noise=not args.no_noise,
+            assembled_hold_steps=args.hold_steps,
+            insert_height=args.insert_height,
+            start_twist_deg=args.start_twist,
+        )
         obs_list, acts, rews, skills = [], [], [], []
         assembled_step = None
         last_state = ""
@@ -241,11 +258,11 @@ def main() -> None:
             acts.append(np.concatenate([a.delta_pos, [q[1], q[2], q[3], q[0]], [a.gripper]]).astype(np.float32))
             _, ee_quat_b = ee_pose_b(env)
             env.step(env_action(env, a, ee_quat_b))
-            now_assembled = bool(tracker(env).all_assembled()[0].item())
-            reward = 1.0 if (now_assembled and assembled_step is None) else 0.0
-            if now_assembled and assembled_step is None:
+            now_assembled = bool(assembled_now(env))  # the raw check, not the latch
+            if a.assembled and assembled_step is None:  # the policy's held check fired
                 assembled_step = t
-                print(f"[collect] step {t:4d}: assembled", flush=True)
+                print(f"[collect] step {t:4d}: assembled (held {args.hold_steps} steps)", flush=True)
+            reward = 1.0 if assembled_step == t else 0.0
             rews.append(reward)
             skills.append(float(a.skill_complete))
             if t % args.print_every == 0:
@@ -254,10 +271,17 @@ def main() -> None:
                     flush=True,
                 )
             if recorder is not None:
-                recorder.caption = f"scripted  step {t:4d}\n{a.state}\nassembled {now_assembled}"
+                recorder.caption = f"scripted  step {t:4d}\n{a.state}\nassembled now {now_assembled}"
                 recorder.frame()
         obs_list.append(read_state(env, part_names, cfg.furniture.mesh_frame)[1])  # the final observation
-        success = assembled_step is not None
+        # the verdict: the leg is assembled NOW, after the hand has lifted clear -- not "was at
+        # some step". A leg knocked through the seat pose, or knocked out after seating, fails.
+        for _ in range(10):
+            env.step(zero)
+        final_assembled = bool(assembled_now(env))
+        success = assembled_step is not None and final_assembled
+        if assembled_step is not None and not final_assembled:
+            print("[collect] assembled during the episode but NOT at the end: counted as a failure", flush=True)
         print(
             f"[collect] demo {attempt}: {'success' if success else 'FAILED'} after {len(acts)} steps "
             f"({time.time() - t0:.0f} s), assembled at {assembled_step}",
