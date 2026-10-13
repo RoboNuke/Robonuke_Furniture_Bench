@@ -84,9 +84,9 @@ first state and drives it two ways, recording an mp4 and a per-step CSV (EE and 
 against the demo, the assembled flag):
 
 ```bash
-# a sim demo from FurnitureBench's scripted policy, in its own Isaac Gym env (Python 3.8)
-python -m furniture_bench.scripts.collect_data --furniture one_leg --is-sim --scripted \
-    --headless --randomness low --num-demos 1 --out-data-path ~/fb_demos
+# a demo from FurnitureBench's scripted policy, ported (furniture_lab/scripted_policy.py) and
+# run in THIS env; writes FurnitureBench's pkl format and layout
+python scripts/collect_scripted.py --headless --num_demos 1 --out_dir ~/fb_demos --video scripted.mp4
 
 python scripts/replay_demo.py --demo ~/fb_demos/one_leg/<d>/<d>.pkl --mode ee_track --headless --out ee_track.mp4
 python scripts/replay_demo.py --demo ~/fb_demos/one_leg/<d>/<d>.pkl --mode actions  --headless --out actions.mp4
