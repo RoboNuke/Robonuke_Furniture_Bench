@@ -17,6 +17,10 @@ A demo ends when the leg is assembled and the hand has lifted clear (success), o
 upstream's ``scripted_timeout`` of 600 steps (failure). With ``--record`` every attempt is
 filmed: a success keeps its video beside its pkl, a failure keeps it under ``fails/`` only
 with ``--save_failure``.
+
+Not headless, the viewport window takes two keys (click it first so it has focus):
+``F`` ends the current rollout at once and files it as a failure, ``Q`` stops collecting
+after the current attempt is filed.
 """
 
 import argparse
@@ -36,7 +40,8 @@ parser.add_argument("--num_demos", type=int, default=1)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--no_noise", action="store_true", help="disable upstream's target/action noise")
 parser.add_argument("--hold_steps", type=int, default=10, help="steps the assembled check must hold to count")
-parser.add_argument("--insert_height", type=float, default=0.072, help="leg centre above the top's tag z before release (upstream 0.084)")
+parser.add_argument("--insert_height", type=float, default=0.077, help="leg centre above the top's tag z at insertion (upstream 0.084)")
+parser.add_argument("--insert_press", type=float, default=0.003, help="m the twist target sits below the insert height (the press on the thread)")
 parser.add_argument("--start_twist", type=float, default=90.0, help="deg of thread-starting twist while still grasped (0 = upstream)")
 parser.add_argument("--timeout", type=int, default=600, help="upstream's scripted_timeout for one_leg")
 parser.add_argument("--save_failure", action="store_true", help="keep failed attempts (pkl + video) under fails/")
@@ -69,6 +74,7 @@ from furniture_lab import scripted_policy as sp  # noqa: E402
 from furniture_lab.tasks.assembly.assembly_env import AssemblyEnv  # noqa: E402
 from furniture_lab.tasks.assembly.assembly_env_cfg import EE_OFFSET  # noqa: E402
 from furniture_lab.tasks.assembly.mdp.state import parts_pose_w, tracker  # noqa: E402
+from furniture_lab.tasks.assembly.mdp.terminations import part_out_of_limits  # noqa: E402
 from furniture_lab.tasks.furniture.assembly import pairs_assembled  # noqa: E402
 from furniture_lab.tasks.assembly.replay_env_cfg import OneLegReplayRelCfg  # noqa: E402
 from furniture_lab.tasks.furniture import frames  # noqa: E402
@@ -112,6 +118,40 @@ class Recorder:
     def close(self) -> None:
         self.writer.close()
         print(f"[collect] wrote {self.writer.path}: {self.frames} frames at {args.fps} fps", flush=True)
+
+
+class AbortKeys:
+    """``F`` / ``Q`` in the viewport window (no-op when headless or without a window)."""
+
+    def __init__(self) -> None:
+        self.abort = False
+        self.quit = False
+        self._sub = None
+        if args.headless:
+            return
+        try:
+            import carb
+            import omni.appwindow
+
+            window = omni.appwindow.get_default_app_window()
+            keyboard = window.get_keyboard() if hasattr(window, "get_keyboard") else window.getKeyboard()
+            self._input = carb.input.acquire_input_interface()
+            self._press = carb.input.KeyboardEventType.KEY_PRESS
+            self._sub = self._input.subscribe_to_keyboard_events(keyboard, self._on_key)
+            print("[collect] keys (viewport focused): F = abort rollout as a failure, Q = stop after this attempt", flush=True)
+        except Exception as e:  # no window, different carb API ...
+            print(f"[collect] abort keys unavailable: {e}", flush=True)
+
+    def _on_key(self, event, *_args, **_kwargs) -> bool:
+        if event.type == self._press:
+            if event.input.name == "F":
+                self.abort = True
+            elif event.input.name == "Q":
+                self.quit = True
+        return True
+
+    def new_attempt(self) -> None:
+        self.abort = False
 
 
 def assembled_now(env) -> bool:
@@ -224,8 +264,10 @@ def main() -> None:
     attempt = 0
     # continue the fail<n> numbering across runs
     failures = max([int(f.stem[4:]) for f in fails_dir.glob("fail*.pkl") if f.stem[4:].isdigit()] + [0])
+    keys = AbortKeys()
     while saved < args.num_demos:
         attempt += 1
+        keys.new_attempt()
         env.reset()
         zero = torch.zeros(1, env.action_manager.total_action_dim, device=env.device)
         zero[0, -1] = 1.0  # gripper open
@@ -239,18 +281,30 @@ def main() -> None:
             assembled_hold_steps=args.hold_steps,
             insert_height=args.insert_height,
             start_twist_deg=args.start_twist,
+            insert_press=args.insert_press,
         )
         obs_list, acts, rews, skills = [], [], [], []
         assembled_step = None
         last_state = ""
         t0 = time.time()
+        aborted = False
+        out_of_limits = False
         for t in range(args.timeout):
+            if keys.abort:
+                aborted = True
+                print(f"[collect] step {t:4d}: aborted by key -> failure", flush=True)
+                break
+            if bool(part_out_of_limits(env)[0].item()):
+                out_of_limits = True
+                print(f"[collect] step {t:4d}: a part left the position limits -> failure", flush=True)
+                break
             state, obs = read_state(env, part_names, cfg.furniture.mesh_frame)
             a = policy.act(state)
             if a.done:
                 break
             if a.state != last_state:
-                print(f"[collect] step {t:4d}: {a.state}", flush=True)
+                leg_z = float(env.scene["square_table_leg4"].data.root_pos_w[0, 2]) - float(env.scene.env_origins[0, 2])
+                print(f"[collect] step {t:4d}: {a.state}  (leg z {leg_z:.4f}, ee z {state.ee_pos[2]:.4f})", flush=True)
                 last_state = a.state
             obs_list.append(obs)
             # upstream's 8-D action, xyzw
@@ -279,7 +333,7 @@ def main() -> None:
         for _ in range(10):
             env.step(zero)
         final_assembled = bool(assembled_now(env))
-        success = assembled_step is not None and final_assembled
+        success = assembled_step is not None and final_assembled and not (aborted or out_of_limits)
         if assembled_step is not None and not final_assembled:
             print("[collect] assembled during the episode but NOT at the end: counted as a failure", flush=True)
         print(
@@ -296,8 +350,8 @@ def main() -> None:
             "skills": skills,
             "success": success,
             "furniture": "one_leg",
-            "error": False,
-            "error_description": "",
+            "error": aborted or out_of_limits,
+            "error_description": "aborted by key" if aborted else ("part out of position limits" if out_of_limits else ""),
         }
         if success:
             stamp = time.strftime("%Y-%m-%d-%H:%M:%S")
@@ -320,6 +374,9 @@ def main() -> None:
                 print(f"[collect] saved failure {fails_dir / f'fail{failures}.pkl'}" + (f" + fail{failures}.mp4" if recorder else ""), flush=True)
             elif recorder is not None:
                 tmp_video.unlink(missing_ok=True)
+        if keys.quit:
+            print("[collect] stopped by key", flush=True)
+            break
         if attempt >= 3 * args.num_demos + 3:
             print("[collect] giving up: too many failures", flush=True)
             break

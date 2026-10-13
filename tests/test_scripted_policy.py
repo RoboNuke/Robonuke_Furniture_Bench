@@ -91,7 +91,7 @@ def test_insert_screw_turns_about_the_hole_before_release():
     start_twist 0 skips it (upstream's sequence)."""
     pol = sp.OneLegScriptedPolicy(seed=0, noise=False)
     leg = pol.leg
-    assert leg.insert_height == 0.072 and leg.start_twist_deg == 90.0
+    assert leg.insert_height == 0.077 and leg.start_twist_deg == 90.0 and leg.insert_press == 0.003
     s = _state(ee_pos=(0.45, 0.03, 0.09))
     hole = (sp.APRIL_TO_ROBOT @ s.parts_tag["square_table_top"] @ leg.default_assembled_pose)[:3, 3]
     leg._state = "insert_screw"
@@ -100,7 +100,7 @@ def test_insert_screw_turns_about_the_hole_before_release():
     goal_pos, goal_rot, gripper, _ = leg.fsm_step(s, "square_table_top")
     assert gripper == 1  # the state does not open the hand
     assert abs(np.linalg.norm(s.ee_pos[:2] - hole[:2]) - np.linalg.norm(goal_pos[:2] - hole[:2])) < 1e-9
-    assert abs(goal_pos[2] - (s.ee_pos[2] - 0.005)) < 1e-9
+    assert abs(goal_pos[2] - (s.ee_pos[2] - leg.insert_press)) < 1e-9
     yaw = np.degrees(np.arctan2(goal_rot[1, 0], goal_rot[0, 0]) - np.arctan2(s.ee_rot[1, 0], s.ee_rot[0, 0]))
     assert abs(((yaw + 180) % 360) - 180 + 90.0) < 1e-6
     # reaching the target advances to the release

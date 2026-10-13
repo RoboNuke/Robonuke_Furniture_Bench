@@ -27,7 +27,7 @@ What is upstream and what is this port's choice:
   poses) in the robot-base frame, ``wxyz`` quaternions, plus the last action.
 * **Reward / termination**: upstream's sparse assembled reward and success; ``time_out``
   at ``episode_length_s`` (upstream's 3000-step cap is 150 s; 30 s is this port's default)
-  and a ``part_dropped`` termination that upstream does not have.
+  and a ``part_out_of_limits`` termination (FurnitureBench's real-robot rule; FurnitureSim lacks it).
 * **Reset**: ``low`` randomness by default (+-1.5 cm, +-15 deg); ``medium`` is a param change
   (``randomize_parts_pose``: 0.05, 45). ``high`` (a table of fixed poses) is not ported.
 """
@@ -233,7 +233,7 @@ class RewardsCfg:
 class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     success = DoneTerm(func=mdp.all_assembled)
-    part_dropped = DoneTerm(func=mdp.part_dropped, params={"margin": 0.05})
+    part_out_of_limits = DoneTerm(func=mdp.part_out_of_limits, params={"margin": 0.05})
 
 
 # ------------------------------------------------------------------------------- env

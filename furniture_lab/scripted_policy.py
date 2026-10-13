@@ -320,13 +320,23 @@ class SquareTableLegPart(_Part):
     """``Leg.fsm_step`` with ``SquareTableLeg``'s numbers."""
 
     def __init__(
-        self, name: str, default_assembled_pos, rng, noise, insert_height: float = 0.072, start_twist_deg: float = 90.0
+        self,
+        name: str,
+        default_assembled_pos,
+        rng,
+        noise,
+        insert_height: float = 0.077,
+        start_twist_deg: float = 90.0,
+        insert_press: float = 0.003,
     ) -> None:
         super().__init__(name, rng, noise)
         #: where the leg centre goes before release, above the top's tag-frame z. Upstream
         #: uses 0.084 (bolt tip ~5 mm above the boss; the leg drops onto the thread and, in
-        #: this sim, topples). 0.072 is the thread stop measured by scripts/smoke.py --drop.
+        #: this sim, topples). scripts/smoke.py --drop measured the free-drop thread stop at
+        #: 0.072; a grasped leg meets the boss at a random thread phase and stops higher.
         self.insert_height = insert_height
+        #: how far below the insert height the twist target sits (the press on the thread)
+        self.insert_press = insert_press
         #: turn applied about the hole axis while still grasped, before releasing, so the
         #: thread is started and the leg stands on its own. 0 restores upstream's behaviour.
         self.start_twist_deg = start_twist_deg
@@ -464,13 +474,13 @@ class SquareTableLegPart(_Part):
                 next_state = "insert_screw" if self.start_twist_deg > 0 else "insert_release"
         elif self._state == "insert_screw":
             # start the thread while still holding the leg: turn it about the hole axis
-            # (vertical through the hole centre) by -start_twist, pressing down a little
+            # (vertical through the hole centre) by -start_twist, pressing down insert_press
             if self.first_setting_target:
                 hole = (a2r @ table_pose @ self.default_assembled_pose)[:3, 3]
                 twist = get_mat([0, 0, 0], [0, 0, -np.radians(self.start_twist_deg)])
                 about = hom(np.eye(3), hole) @ twist @ hom(np.eye(3), -hole)
                 self.target = about @ ee_pose
-                self.target[2, 3] -= 0.005
+                self.target[2, 3] -= self.insert_press
                 self.first_setting_target = False
             target = self.target
             if self.satisfy(ee_pose, target, pos_error_threshold=0.01, ori_error_threshold=0.3, max_len=40):
@@ -555,14 +565,15 @@ class OneLegScriptedPolicy:
         seed: int = 0,
         noise: bool = True,
         assembled_hold_steps: int = 10,
-        insert_height: float = 0.072,
+        insert_height: float = 0.077,
         start_twist_deg: float = 90.0,
+        insert_press: float = 0.003,
     ) -> None:
         self.rng = np.random.default_rng(seed)
         self.noise = noise
         self.top = SquareTableTopPart(self.rng, noise)
         self.leg = SquareTableLegPart(
-            "square_table_leg4", self.LEG4_ASSEMBLED_POS, self.rng, noise, insert_height, start_twist_deg
+            "square_table_leg4", self.LEG4_ASSEMBLED_POS, self.rng, noise, insert_height, start_twist_deg, insert_press
         )
         self.assemble_idx = 0
         self.move_neutral = False

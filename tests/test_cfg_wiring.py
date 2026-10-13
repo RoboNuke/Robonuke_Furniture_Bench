@@ -122,3 +122,25 @@ def test_registry_entry_points_resolve(cfg_module):
         assert getattr(importlib.import_module(mod), attr).__name__ == cls
         mod, attr = spec.entry_point.split(":")
         assert hasattr(importlib.import_module(mod), attr)
+
+
+def test_part_out_of_limits_is_upstreams_rule(cfg_module, monkeypatch):
+    """A part on the table but outside upstream's robot-frame limits ends the episode; the old
+    'fell 5 cm below the table' rule alone never fired, since the table is 1.3 m wide."""
+    import torch
+
+    from furniture_lab.tasks.assembly.mdp import terminations
+
+    quat = torch.tensor([[[1.0, 0, 0, 0]] * 2])
+    cases = {
+        "on the table, inside": ([[0.54, 0.0, 0.001], [0.37, 0.2, 0.0]], False),
+        "slid toward the robot": ([[0.54, 0.0, 0.001], [0.28, 0.2, 0.0]], True),
+        "slid sideways": ([[0.54, 0.0, 0.001], [0.37, 0.56, 0.0]], True),
+        "thrown up": ([[0.54, 0.0, 0.41], [0.37, 0.2, 0.0]], True),
+        "below the table": ([[0.54, 0.0, 0.001], [0.37, 0.2, -0.1]], True),
+        "slightly below (detection slop)": ([[0.54, 0.0, 0.001], [0.37, 0.2, -0.03]], False),
+    }
+    for name, (pos, expect) in cases.items():
+        monkeypatch.setattr(terminations, "parts_pose_b", lambda env, p=pos: (torch.tensor([p]), quat))
+        assert bool(terminations.part_out_of_limits(env=None)[0]) is expect, name
+    assert cfg_module.TerminationsCfg().part_out_of_limits.func is terminations.part_out_of_limits
