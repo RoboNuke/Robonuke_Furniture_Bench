@@ -333,8 +333,11 @@ class SquareTableLegPart(_Part):
         #: the wrist cannot spin: panda_joint7 is limited to +-2.8973 rad. Each grasp winds
         #: the open hand back to Q7_MIN + margin, then tightens to Q7_MAX - margin.
         self.q7_margin = 0.15
-        #: yaw commanded per step (deg); the controller is led by at most this much
-        self.yaw_step_deg = 45.0
+        #: yaw commanded per step (deg); the controller is led by at most this much. 4.5 deg
+        #: per 20 Hz step = 90 deg/s, the rate scripts/screw_calib.py showed screws the leg
+        #: in with no slip and no wandering; upstream's one-step -95 deg makes this OSC lurch
+        #: ~3 cm and pull the leg out (fail1/4/5.pkl)
+        self.yaw_step_deg = 4.5
         #: press on the thread while turning (m per step, upstream 0.005)
         self.screw_press = 0.005
         #: hover above the leg centre by this much while re-orienting the open hand

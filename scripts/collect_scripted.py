@@ -38,7 +38,7 @@ parser.add_argument("--out_dir", type=str, default="fb_demos")
 parser.add_argument("--num_demos", type=int, default=1)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--no_noise", action="store_true", help="disable upstream's target/action noise")
-parser.add_argument("--yaw_step", type=float, default=45.0, help="deg of yaw commanded per step while winding back / screwing")
+parser.add_argument("--rot_speed", type=float, default=90.0, help="deg/s of wrist rotation while winding back / screwing (calibrated: 90)")
 parser.add_argument("--screw_press", type=float, default=0.005, help="m pressed on the thread per step while screwing (upstream 0.005)")
 parser.add_argument("--timeout", type=int, default=600, help="upstream's scripted_timeout for one_leg")
 parser.add_argument("--save_failure", action="store_true", help="keep failed attempts (pkl + video) under fails/")
@@ -284,7 +284,7 @@ def main() -> None:
         tmp_video = out_root / f".attempt{attempt}.mp4"
         recorder = Recorder(env, tmp_video) if args.record else None
         policy = sp.OneLegScriptedPolicy(seed=args.seed + attempt - 1, noise=not args.no_noise)
-        policy.leg.yaw_step_deg = args.yaw_step
+        policy.leg.yaw_step_deg = args.rot_speed * env.step_dt
         policy.leg.screw_press = args.screw_press
         obs_list, acts, rews, skills = [], [], [], []
         assembled_step = None

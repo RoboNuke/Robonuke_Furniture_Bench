@@ -135,6 +135,7 @@ def test_regrasp_winds_back_then_screws_with_the_wrist_only():
     assert leg.Q7_MIN + leg.q7_margin - 0.06 <= q7_at_grasp < leg.Q7_MIN + leg.q7_margin + np.pi / 2
     assert s.joints[6] > leg.Q7_MAX - leg.q7_margin - 0.06  # tightened to the other end
     assert np.degrees(s.joints[6] - q7_at_grasp) > 200  # one grasp, 200-300 deg of screwing
+    assert leg.yaw_step_deg == 4.5  # 90 deg/s at 20 Hz, from scripts/screw_calib.py
     assert max_yaw_step <= leg.yaw_step_deg + 1e-6
     assert screw_steps >= 200 / leg.yaw_step_deg
 
