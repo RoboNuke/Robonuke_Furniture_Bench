@@ -290,10 +290,10 @@ class ServoOneLegPolicy:
             tgt_pos, tgt_R = self._corner_goal(s)
             goal_pos, goal_R, ep, er = self.servo.step(T_top[:3, 3], T_top[:3, :3], tgt_pos, tgt_R, ee_pos, ee_R)
             goal_pos[2] = ee_pos[2]  # slide it: no lift, no press
-            # done when it is there, or when the walls stop it (the goal is inside them)
-            at_goal = ep < 0.004 and er < np.radians(2.0)
+            # done when it has stopped moving near the goal: the goal is inside the walls,
+            # so that is the walls holding it (converged-in-free-space also stalls)
             against_wall = self._stalled(np.array([T_top[0, 3], T_top[1, 3], 0.1 * yaw_of(T_top[:3, :3])]), 5, 0.0003) and ep < 0.015
-            if at_goal or against_wall:
+            if against_wall:
                 self.hold_pose = hom(ee_R, ee_pos)
                 self.gripper = -1.0
                 self._goto("top_release")
