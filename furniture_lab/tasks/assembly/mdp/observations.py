@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import torch
 
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.utils.math import combine_frame_transforms, quat_apply_inverse, subtract_frame_transforms
+from isaaclab.utils.math import combine_frame_transforms, quat_apply_inverse, quat_mul, subtract_frame_transforms
 
 from .state import parts_pose_b
 
@@ -75,3 +75,34 @@ def parts_poses(env: "ManagerBasedRLEnv") -> torch.Tensor:
     order of ``cfg.furniture.part_names`` (upstream's part index order)."""
     pos, quat = parts_pose_b(env)
     return torch.cat([pos, quat], dim=-1).reshape(env.num_envs, -1)
+
+
+# ------------------------------------------------------------------ FurnitureBench's own layout
+def ee_quat_xyzw(
+    env: "ManagerBasedRLEnv",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="panda_hand"),
+    offset: tuple = (0.0, 0.0, 0.1034),
+) -> torch.Tensor:
+    """``ee_quat`` in FurnitureBench's ``(x, y, z, w)`` order."""
+    q = _ee_pose_b(env, asset_cfg, offset)[1]
+    return q[:, [1, 2, 3, 0]]
+
+
+def parts_poses_tag(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """FurnitureBench's ``parts_poses``: ``(N, 7 P)`` of ``[pos 3, quat xyzw 4]`` per part, the
+    OBJ mesh frames in the AprilTag frame -- what upstream's policies observe and what the
+    demo pkls hold (the collector's ``read_state``, batched)."""
+    from ...furniture import frames
+    from ...furniture.square_table import MESH_FRAMES
+
+    pos_b, quat_b = parts_pose_b(env)  # USD mesh frames, robot-base frame, wxyz
+    N, P = pos_b.shape[:2]
+    device, dtype = pos_b.device, pos_b.dtype
+    tag_pos = torch.tensor(frames.TAG_POS_W, device=device, dtype=dtype).expand(N * P, -1)
+    tag_quat = torch.tensor(frames.mat_to_quat_wxyz(frames.TAG_ROT_W), device=device, dtype=dtype).expand(N * P, -1)
+    pos_t, quat_t = subtract_frame_transforms(tag_pos, tag_quat, pos_b.reshape(-1, 3), quat_b.reshape(-1, 4))
+    # USD frame -> OBJ frame: R_obj = R_usd @ R_mesh (square_table.reset_pose_world's inverse)
+    q_mesh = torch.tensor(frames.mat_to_quat_wxyz(MESH_FRAMES[env.cfg.furniture.mesh_frame]), device=device, dtype=dtype)
+    quat_o = quat_mul(quat_t, q_mesh.expand(N * P, -1))
+    out = torch.cat([pos_t, quat_o[:, [1, 2, 3, 0]]], dim=-1)
+    return out.reshape(N, 7 * P)

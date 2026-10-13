@@ -19,6 +19,14 @@ Isaac Lab env**, as a project on [robonuke_rl_core](https://github.com/RoboNuke/
 The docstring at the top of `assembly_env_cfg.py` lists, item by item, what is copied from
 upstream and what is this port's choice.
 
+## Task ids
+
+| id | observation | action | for |
+| --- | --- | --- | --- |
+| `Isaac-Furniture-OneLeg-v0` | this port's 56-d (base frame, wxyz, + last action) | 7-d: OSC `pose_rel` (scaled) + binary gripper | RL |
+| `Isaac-Furniture-OneLeg-FB-v0` | **FurnitureBench's own** 49-d `DEFAULT_STATE_OBS` (`ee_pos, ee_quat xyzw, ee_pos_vel, ee_ori_vel, gripper_width, parts_poses` in the AprilTag frame) | **FurnitureBench's own** 8-d `[dpos, dquat xyzw (EE frame), gripper]`, driving the same OSC + gripper (`mdp.FurnitureBenchAction`) | policies trained on the demo pkls (BC, residual) |
+| `Isaac-Furniture-SquareTable-v0` | as the first | as the first | all four legs |
+
 ## Setup
 
 ```bash

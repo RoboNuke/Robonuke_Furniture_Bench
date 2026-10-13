@@ -172,3 +172,22 @@ def test_gripper_knobs_reach_the_finger_actuator(cfg_module):
     for name in ("effort_limit", "effort_limit_sim"):
         if hasattr(act, name):
             assert getattr(act, name) == 200.0
+
+
+def test_furniturebench_interface_cfg(cfg_module):
+    """Isaac-Furniture-OneLeg-FB-v0: upstream's 49-d state observation in its order, no
+    previous action, and the 8-d action term driving the task's own arm and gripper terms."""
+    cfg = cfg_module.OneLegFBEnvCfg()
+    terms = [n for n in vars(type(cfg.observations.policy)) if not n.startswith("_") and n != "__post_init__"]
+    terms = [n for n in terms if hasattr(getattr(cfg.observations.policy, n), "func")]
+    assert terms == ["ee_pos", "ee_quat", "ee_vel", "gripper_width", "parts_poses"]
+    assert cfg.observations.policy.ee_quat.func.__name__ == "ee_quat_xyzw"
+    assert cfg.observations.policy.parts_poses.func.__name__ == "parts_poses_tag"
+    assert cfg_module.FB_OBS_DIM == 49 and cfg_module.FB_ACTION_DIM == 8
+    assert [n for n, _ in cfg_module.FB_OBS_LAYOUT] == ["ee_pos", "ee_quat", "ee_pos_vel", "ee_ori_vel", "gripper_width", "parts_poses"]
+    fb = cfg.actions.fb
+    assert fb.arm is cfg_module.ActionsCfg.arm and fb.gripper is cfg_module.ActionsCfg.gripper
+    assert fb.class_type.__name__ == "FurnitureBenchAction"
+    # the task env's success termination and the rest are inherited unchanged
+    assert cfg.terminations.success.func.__name__ == "all_assembled"
+    assert cfg.furniture.task == "one_leg"

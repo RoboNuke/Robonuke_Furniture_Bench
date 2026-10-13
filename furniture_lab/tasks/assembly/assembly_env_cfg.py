@@ -321,6 +321,55 @@ class OneLegEnvCfg(AssemblyEnvCfg):
     furniture: FurnitureCfg = FurnitureCfg(task="one_leg")
 
 
+# ------------------------------------------------------- FurnitureBench's own interface
+#: FurnitureBench's DEFAULT_STATE_OBS, in order, with widths: the layout of the policy
+#: observation below and of the demo pkls' ``observation.state``
+FB_OBS_LAYOUT = (("ee_pos", 3), ("ee_quat", 4), ("ee_pos_vel", 3), ("ee_ori_vel", 3), ("gripper_width", 1), ("parts_poses", 35))
+FB_OBS_DIM = sum(w for _, w in FB_OBS_LAYOUT)
+FB_ACTION_DIM = 8
+
+
+@configclass
+class FBObservationsCfg:
+    """Upstream's state observation, verbatim: ``ee_pos, ee_quat (xyzw), ee_pos_vel,
+    ee_ori_vel, gripper_width, parts_poses (AprilTag frame, OBJ mesh frames, xyzw)`` -- 49
+    dims, no previous action. What the demos hold and what a policy trained on them sees."""
+
+    @configclass
+    class PolicyCfg(ObsGroup):
+        ee_pos = ObsTerm(func=mdp.ee_pos, params={"asset_cfg": EE_BODY, "offset": EE_OFFSET})
+        ee_quat = ObsTerm(func=mdp.ee_quat_xyzw, params={"asset_cfg": EE_BODY, "offset": EE_OFFSET})
+        ee_vel = ObsTerm(func=mdp.ee_vel, params={"asset_cfg": EE_BODY})  # pos_vel then ori_vel
+        gripper_width = ObsTerm(
+            func=mdp.gripper_width,
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names="panda_finger_joint.*")},
+        )
+        parts_poses = ObsTerm(func=mdp.parts_poses_tag)
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    policy: PolicyCfg = PolicyCfg()
+
+
+@configclass
+class FBActionsCfg:
+    """Upstream's 8-d action ``[dpos, dquat xyzw (EE frame), gripper]`` driving the task's own
+    OSC and gripper terms (``mdp.FurnitureBenchAction``)."""
+
+    fb = mdp.FurnitureBenchActionCfg(asset_name="robot", arm=ActionsCfg.arm, gripper=ActionsCfg.gripper)
+
+
+@configclass
+class OneLegFBEnvCfg(OneLegEnvCfg):
+    """``one_leg`` with FurnitureBench's own observation (49) and action (8): the interface the
+    scripted demos are recorded in, for policies trained on them."""
+
+    observations: FBObservationsCfg = FBObservationsCfg()
+    actions: FBActionsCfg = FBActionsCfg()
+
+
 @configclass
 class SquareTableEnvCfg(AssemblyEnvCfg):
     furniture: FurnitureCfg = FurnitureCfg(task="square_table")

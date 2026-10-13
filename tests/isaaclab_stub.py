@@ -116,6 +116,8 @@ def install():
             for n in ("EventTermCfg", "ObservationTermCfg", "RewardTermCfg", "TerminationTermCfg", "SceneEntityCfg")
         },
         ObservationGroupCfg=type("ObservationGroupCfg", (), {}),
+        ActionTerm=type("ActionTerm", (), {"__init__": lambda self, cfg, env: None}),
+        ActionTermCfg=_kwargs_class("ActionTermCfg"),
     )
     module("isaaclab.scene", InteractiveSceneCfg=type("InteractiveSceneCfg", (), {}))
     module("isaaclab.utils", configclass=configclass)
@@ -123,7 +125,7 @@ def install():
         "isaaclab.utils.math",
         **{n: (lambda *a, **k: None) for n in (
             "subtract_frame_transforms", "combine_frame_transforms", "quat_apply_inverse",
-            "quat_from_euler_xyz", "quat_mul",
+            "quat_from_euler_xyz", "quat_mul", "axis_angle_from_quat", "quat_conjugate",
         )},
     )
     # ---- envs and stock mdp
