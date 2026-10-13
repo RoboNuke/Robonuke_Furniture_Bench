@@ -37,10 +37,14 @@ class AssetEntry:
 
 CATALOG: Dict[str, AssetEntry] = {
     "square_table_top": AssetEntry("SquareTableTop", "square_table_top.usd"),
-    "square_table_leg1": AssetEntry("SquareLeg", "square_leg.usd"),
-    "square_table_leg2": AssetEntry("SquareLeg", "square_leg.usd"),
-    "square_table_leg3": AssetEntry("SquareLeg", "square_leg.usd"),
-    "square_table_leg4": AssetEntry("SquareLeg", "square_leg.usd"),
+    # square_leg_phase0.usd is UWLab's square_leg.usd with its bolt prims turned +26 deg
+    # about the leg axis (tools/fix_leg_phase.py), so the thread seats with the leg square
+    # to the top -- as the real part does and as FurnitureBench's assembled rule assumes.
+    # In the original the seat lands at 26 deg of twist (measured by scripts/smoke.py).
+    "square_table_leg1": AssetEntry("SquareLeg", "square_leg_phase0.usd"),
+    "square_table_leg2": AssetEntry("SquareLeg", "square_leg_phase0.usd"),
+    "square_table_leg3": AssetEntry("SquareLeg", "square_leg_phase0.usd"),
+    "square_table_leg4": AssetEntry("SquareLeg", "square_leg_phase0.usd"),
     # the drawer parts are in assets/ too; they get rows when the drawer task is ported
 }
 

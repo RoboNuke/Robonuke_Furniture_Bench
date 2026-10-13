@@ -13,3 +13,9 @@ identity for the square table); `bottom_offset` is the part's lowest point in it
 `Obstacle/obstacle.usd` is UWLab's one-piece obstacle (front wall with 16 cm side walls
 attached). The env spawns FurnitureBench's own three-box layout from primitives instead, so
 this file is unused.
+
+`SquareLeg/square_leg_phase0.usd` is derived from `square_leg.usd` by `tools/fix_leg_phase.py`:
+the bolt prims are turned +26° about the leg axis. In the original, a leg screwed down until
+its bolt tip bottoms on the plate sits 26° off square (the thread was authored out of phase
+with the leg body); the corrected file seats at 0°, matching the real part and FurnitureBench's
+assembled-orientation rule. The catalog uses the corrected file.
