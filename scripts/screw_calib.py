@@ -89,7 +89,7 @@ from furniture_lab.tasks.assembly.mdp.state import parts_pose_w, tracker  # noqa
 from furniture_lab.tasks.assembly.replay_env_cfg import OneLegReplayAbsCfg  # noqa: E402
 from furniture_lab.tasks.furniture import frames  # noqa: E402
 from furniture_lab.tasks.furniture.assembly import pairs_assembled, relative_pose, rotation_diag  # noqa: E402
-from furniture_lab.tasks.furniture.square_table import rel_pose_targets  # noqa: E402
+from furniture_lab.tasks.furniture.square_table import PARTS, rel_pose_targets, reset_pose_world  # noqa: E402
 
 CAMERA_KEY = "recorder_cam"
 Q7_MIN, Q7_MAX = -2.8973, 2.8973
@@ -217,7 +217,10 @@ def main() -> None:
         ty = frames.OBSTACLE_SIDE_POS["obstacle_left"][1] - frames.OBSTACLE_SIDE_SIZE[1] / 2 - TOP_HALF_WIDTH - 0.01
     top_pos = top.data.root_pos_w[:1].clone()
     top_pos[0, 0], top_pos[0, 1] = origin[0, 0] + tx, origin[0, 1] + ty
-    top_quat = top.data.root_quat_w[:1].clone()
+    # the nominal reset orientation, without the reset's +-15 deg yaw noise: a square top
+    # yawed 15 deg reaches 2.5 cm further into the corner and lands inside the obstacle
+    _, nominal_quat = reset_pose_world(PARTS[0], cfg.furniture.mesh_frame)
+    top_quat = torch.tensor([nominal_quat], dtype=torch.float32, device=dev)
     zero6 = torch.zeros(1, 6, device=dev)
     top.write_root_pose_to_sim(torch.cat([top_pos, top_quat], dim=-1))
     top.write_root_velocity_to_sim(zero6)
