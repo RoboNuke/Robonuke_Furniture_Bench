@@ -136,3 +136,29 @@ def test_turns_are_about_the_hole_axis_in_steps():
         leg0.fsm_step(s, "square_table_top")
         states.append(leg0._state)
     assert "insert_release" in states and "insert_screw" not in states
+
+
+def test_turn_position_never_runs_ahead_of_a_lagging_orientation():
+    """Position tracks perfectly, orientation only gets halfway each step: the angle of the
+    hand around the hole axis must stay within one turn step of the hand's actual yaw."""
+    leg = sp.OneLegScriptedPolicy(seed=0, noise=False).leg
+    s = _state(ee_pos=(0.45, 0.03, 0.09))
+    hole = (sp.APRIL_TO_ROBOT @ s.parts_tag["square_table_top"] @ leg.default_assembled_pose)[:3, 3]
+    off0 = s.ee_pos[:2] - hole[:2]
+    R0 = s.ee_rot.copy()
+    leg._state, leg.first_setting_target, leg.gripper_action = "screw", True, 1
+    for _ in range(60):
+        goal_pos, goal_rot, _, _ = leg.fsm_step(s, "square_table_top")
+        if leg._state != "screw":
+            break
+        s.ee_pos = goal_pos.copy()
+        # halfway toward the goal orientation, about the vertical
+        want = _yaw(goal_rot @ R0.T)
+        have = _yaw(s.ee_rot @ R0.T)
+        s.ee_rot = sp.get_mat([0, 0, 0], [0, 0, np.radians(have + 0.5 * (want - have))])[:3, :3] @ R0
+        off = s.ee_pos[:2] - hole[:2]
+        around = np.degrees(np.arctan2(off[1], off[0]) - np.arctan2(off0[1], off0[0]))
+        around = ((around + 180) % 360) - 180
+        assert abs(around - _yaw(s.ee_rot @ R0.T)) <= leg.turn_step_deg + 1e-6
+    assert leg._state == "release"
+    assert abs(_yaw(s.ee_rot @ R0.T) + 95.0) < 3.0

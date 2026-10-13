@@ -401,19 +401,26 @@ class SquareTableLegPart(_Part):
         return float(np.degrees(np.arctan2(rel[1, 0], rel[0, 0])))
 
     def _turn_target(self, s: ScriptedState, table_pose, ee_pose, total_deg: float, press: float):
-        """The next target of a turn about the hole axis: the EE pose rotated about the vertical
-        line through the hole centre by at most ``turn_step_deg`` toward ``total_deg``
-        (negative = clockwise seen from above), pressed ``press`` below its current height.
-        Returns (target, finished)."""
+        """The next target of a turn about the hole axis.
+
+        Both the orientation and the position are driven by the yaw the hand has *actually*
+        reached: the commanded angle is that yaw plus at most ``turn_step_deg`` toward
+        ``total_deg`` (negative = clockwise seen from above); the target orientation is the
+        start orientation yawed by it, the target position is the start offset from the hole
+        axis yawed by it. Rotating the current pose each step instead lets the position (fast)
+        run ahead of the orientation (slow) around the circle, which drags the leg sideways.
+        Pressed ``press`` below the current height. Returns (target, finished)."""
+        hole = (APRIL_TO_ROBOT @ table_pose @ self.default_assembled_pose)[:3, 3]
         if self.first_setting_target:
             self._turn_R0 = ee_pose[:3, :3].copy()
+            self._turn_offset0 = ee_pose[:3, 3] - hole  # the hand's offset from the hole axis
             self.first_setting_target = False
-        hole = (APRIL_TO_ROBOT @ table_pose @ self.default_assembled_pose)[:3, 3]
-        remaining = total_deg - self._turned_deg(ee_pose)
-        step = float(np.clip(remaining, -self.turn_step_deg, self.turn_step_deg))
-        about = hom(np.eye(3), hole) @ get_mat([0, 0, 0], [0, 0, np.radians(step)]) @ hom(np.eye(3), -hole)
-        target = about @ ee_pose
-        target[2, 3] -= press
+        turned = self._turned_deg(ee_pose)
+        remaining = total_deg - turned
+        cmd = turned + float(np.clip(remaining, -self.turn_step_deg, self.turn_step_deg))
+        Rz = get_mat([0, 0, 0], [0, 0, np.radians(cmd)])[:3, :3]
+        target = hom(Rz @ self._turn_R0, hole + Rz @ self._turn_offset0)
+        target[2, 3] = ee_pose[2, 3] - press
         return target, abs(remaining) < 2.0
 
     def fsm_step(self, s: ScriptedState, assemble_to: str):
