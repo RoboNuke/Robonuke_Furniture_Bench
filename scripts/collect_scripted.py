@@ -41,6 +41,7 @@ parser.add_argument("--no_noise", action="store_true", help="disable upstream's 
 parser.add_argument("--hold_steps", type=int, default=10, help="steps the assembled check must hold to count")
 parser.add_argument("--insert_height", type=float, default=0.077, help="leg centre above the top's tag z at insertion (upstream 0.084)")
 parser.add_argument("--insert_press", type=float, default=0.003, help="m the twist target sits below the insert height (the press on the thread)")
+parser.add_argument("--turn_step", type=float, default=10.0, help="deg per step the turns about the hole axis are fed to the controller")
 parser.add_argument("--start_twist", type=float, default=90.0, help="deg of thread-starting twist while still grasped (0 = upstream)")
 parser.add_argument("--timeout", type=int, default=600, help="upstream's scripted_timeout for one_leg")
 parser.add_argument("--save_failure", action="store_true", help="keep failed attempts (pkl + video) under fails/")
@@ -283,6 +284,7 @@ def main() -> None:
             insert_height=args.insert_height,
             start_twist_deg=args.start_twist,
             insert_press=args.insert_press,
+            turn_step_deg=args.turn_step,
         )
         obs_list, acts, rews, skills = [], [], [], []
         assembled_step = None

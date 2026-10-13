@@ -328,8 +328,14 @@ class SquareTableLegPart(_Part):
         insert_height: float = 0.077,
         start_twist_deg: float = 90.0,
         insert_press: float = 0.003,
+        turn_step_deg: float = 10.0,
     ) -> None:
         super().__init__(name, rng, noise)
+        #: every turn (the thread start and upstream's screw) is about the vertical axis
+        #: through the hole, not the EE's own axis (an off-centre grasp would orbit the leg
+        #: and pull it out), and is fed to the controller this many degrees per step.
+        self.turn_step_deg = turn_step_deg
+        self._turn_R0: Optional[np.ndarray] = None
         #: where the leg centre goes before release, above the top's tag-frame z. Upstream
         #: uses 0.084 (bolt tip ~5 mm above the boss; the leg drops onto the thread and, in
         #: this sim, topples). scripts/smoke.py --drop measured the free-drop thread stop at
@@ -388,6 +394,27 @@ class SquareTableLegPart(_Part):
                 [0.0, 0.0, 0.0, 1.0],
             ]
         )
+
+    def _turned_deg(self, ee_pose: np.ndarray) -> float:
+        """Yaw of the EE about the world vertical since the turn began (signed degrees)."""
+        rel = ee_pose[:3, :3] @ self._turn_R0.T
+        return float(np.degrees(np.arctan2(rel[1, 0], rel[0, 0])))
+
+    def _turn_target(self, s: ScriptedState, table_pose, ee_pose, total_deg: float, press: float):
+        """The next target of a turn about the hole axis: the EE pose rotated about the vertical
+        line through the hole centre by at most ``turn_step_deg`` toward ``total_deg``
+        (negative = clockwise seen from above), pressed ``press`` below its current height.
+        Returns (target, finished)."""
+        if self.first_setting_target:
+            self._turn_R0 = ee_pose[:3, :3].copy()
+            self.first_setting_target = False
+        hole = (APRIL_TO_ROBOT @ table_pose @ self.default_assembled_pose)[:3, 3]
+        remaining = total_deg - self._turned_deg(ee_pose)
+        step = float(np.clip(remaining, -self.turn_step_deg, self.turn_step_deg))
+        about = hom(np.eye(3), hole) @ get_mat([0, 0, 0], [0, 0, np.radians(step)]) @ hom(np.eye(3), -hole)
+        target = about @ ee_pose
+        target[2, 3] -= press
+        return target, abs(remaining) < 2.0
 
     def fsm_step(self, s: ScriptedState, assemble_to: str):
         next_state = self._state
@@ -473,17 +500,10 @@ class SquareTableLegPart(_Part):
                 self.prev_pose = target
                 next_state = "insert_screw" if self.start_twist_deg > 0 else "insert_release"
         elif self._state == "insert_screw":
-            # start the thread while still holding the leg: turn it about the hole axis
-            # (vertical through the hole centre) by -start_twist, pressing down insert_press
-            if self.first_setting_target:
-                hole = (a2r @ table_pose @ self.default_assembled_pose)[:3, 3]
-                twist = get_mat([0, 0, 0], [0, 0, -np.radians(self.start_twist_deg)])
-                about = hom(np.eye(3), hole) @ twist @ hom(np.eye(3), -hole)
-                self.target = about @ ee_pose
-                self.target[2, 3] -= self.insert_press
-                self.first_setting_target = False
-            target = self.target
-            if self.satisfy(ee_pose, target, pos_error_threshold=0.01, ori_error_threshold=0.3, max_len=40):
+            # start the thread while still holding the leg: turn it about the hole axis by
+            # -start_twist, pressing down insert_press
+            target, finished = self._turn_target(s, table_pose, ee_pose, -self.start_twist_deg, self.insert_press)
+            if finished or self.curr_cnt - self.prev_cnt >= 40:
                 self.prev_pose = target
                 next_state = "insert_release"
         elif self._state == "insert_release":
@@ -514,11 +534,10 @@ class SquareTableLegPart(_Part):
                 self.prev_pose = target
                 next_state = "screw"
         elif self._state == "screw":
-            target_ori = get_mat([0, 0, 0], [np.pi, 0, -np.pi / 2 - np.pi / 36])[:3, :3]
-            target_pos = ee_pos.copy()
-            target_pos[2] -= 0.005
-            target = hom(target_ori, target_pos)
-            if self.satisfy(ee_pose, target, ori_error_threshold=0.3):
+            # upstream: yaw the EE to -(90 + 5) deg in place, pressing 5 mm; here the same turn
+            # is made about the hole axis, in steps
+            target, finished = self._turn_target(s, table_pose, ee_pose, -95.0, 0.005)
+            if finished or self.curr_cnt - self.prev_cnt >= 25:
                 self.prev_pose = target
                 next_state = "release"
         else:
@@ -568,12 +587,20 @@ class OneLegScriptedPolicy:
         insert_height: float = 0.077,
         start_twist_deg: float = 90.0,
         insert_press: float = 0.003,
+        turn_step_deg: float = 10.0,
     ) -> None:
         self.rng = np.random.default_rng(seed)
         self.noise = noise
         self.top = SquareTableTopPart(self.rng, noise)
         self.leg = SquareTableLegPart(
-            "square_table_leg4", self.LEG4_ASSEMBLED_POS, self.rng, noise, insert_height, start_twist_deg, insert_press
+            "square_table_leg4",
+            self.LEG4_ASSEMBLED_POS,
+            self.rng,
+            noise,
+            insert_height,
+            start_twist_deg,
+            insert_press,
+            turn_step_deg,
         )
         self.assemble_idx = 0
         self.move_neutral = False
