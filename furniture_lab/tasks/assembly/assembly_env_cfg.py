@@ -115,6 +115,12 @@ class FurnitureCfg:
     #: print a line on every reset (which envs, after how many steps, which termination
     #: fired). For watching; off for training, where it would print every step.
     log_resets: bool = False
+    #: friction of the parts and of the table/obstacles (PhysX averages a pair, so part on
+    #: table = (part + table) / 2). Defaults are FurnitureSim's: 0.15 and 0.10, i.e. 0.125
+    #: between a part and the table -- icy; wood on laminate is 0.3-0.5. Applied in
+    #: ``AssemblyEnvCfg.__post_init__`` to the startup events and the sim material.
+    part_friction: float = PART_FRICTION
+    table_friction: float = TABLE_FRICTION
 
 
 @configclass
@@ -275,6 +281,19 @@ class AssemblyEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.lookat = (0.4, 0.0, 0.0)
         if self.furniture.task is MISSING:
             raise ValueError("furniture.task is unset: use OneLegEnvCfg or SquareTableEnvCfg")
+        self.apply_friction()
+
+    def apply_friction(self) -> None:
+        """Push ``furniture.part_friction`` / ``table_friction`` into the startup friction
+        events and the sim's default material (call again after changing them)."""
+        f = float(self.furniture.part_friction)
+        for name in PART_NAMES:
+            term = getattr(self.events, f"{name.replace('square_table_', '')}_friction", None)
+            if term is not None:
+                term.params["static_friction_range"] = (f, f)
+                term.params["dynamic_friction_range"] = (f, f)
+        self.sim.physics_material.static_friction = float(self.furniture.table_friction)
+        self.sim.physics_material.dynamic_friction = float(self.furniture.table_friction)
 
 
 @configclass

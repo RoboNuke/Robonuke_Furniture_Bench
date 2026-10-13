@@ -50,6 +50,8 @@ parser.add_argument("--fps", type=int, default=20)
 parser.add_argument("--cam", type=str, default="0.95,0.45,0.35")
 parser.add_argument("--look", type=str, default="0.54,0.0,0.03")
 parser.add_argument("--print_every", type=int, default=25)
+parser.add_argument("--part_friction", type=float, default=None, help="parts' friction (FurnitureSim: 0.15)")
+parser.add_argument("--table_friction", type=float, default=None, help="table/obstacle friction (FurnitureSim: 0.10)")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 if args.record:
@@ -243,6 +245,11 @@ def main() -> None:
     cfg = OneLegReplayRelCfg()
     cfg.scene.num_envs = 1
     cfg.furniture.log_resets = True
+    if args.part_friction is not None:
+        cfg.furniture.part_friction = args.part_friction
+    if args.table_friction is not None:
+        cfg.furniture.table_friction = args.table_friction
+    cfg.apply_friction()
     if args.record:
         cfg.scene.clone_in_fabric = False
         setattr(

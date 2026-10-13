@@ -28,6 +28,8 @@ from isaaclab.app import AppLauncher  # noqa: E402
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--task", default="Isaac-Furniture-OneLeg-v0")
 parser.add_argument("--num_envs", type=int, default=2)
+parser.add_argument("--part_friction", type=float, default=None, help="parts' friction (FurnitureSim: 0.15)")
+parser.add_argument("--table_friction", type=float, default=None, help="table/obstacle friction (FurnitureSim: 0.10)")
 parser.add_argument("--steps", type=int, default=50)
 parser.add_argument("--teleport", action="store_true", help="seat leg 4 in the top, then check")
 parser.add_argument("--hole", type=int, default=0, help="which of the 4 holes to seat it in")
@@ -229,6 +231,11 @@ def main() -> None:
     cfg = load_cfg_from_registry(args.task, "env_cfg_entry_point")
     cfg.scene.num_envs = args.num_envs
     cfg.furniture.log_resets = True  # say when and why an env resets
+    if args.part_friction is not None:
+        cfg.furniture.part_friction = args.part_friction
+    if args.table_friction is not None:
+        cfg.furniture.table_friction = args.table_friction
+    cfg.apply_friction()
     if args.contact_offset is not None or args.rest_offset is not None:
         for name in cfg.furniture.part_names:
             props = getattr(cfg.scene, name).spawn.collision_props

@@ -144,3 +144,18 @@ def test_part_out_of_limits_is_upstreams_rule(cfg_module, monkeypatch):
         monkeypatch.setattr(terminations, "parts_pose_b", lambda env, p=pos: (torch.tensor([p]), quat))
         assert bool(terminations.part_out_of_limits(env=None)[0]) is expect, name
     assert cfg_module.TerminationsCfg().part_out_of_limits.func is terminations.part_out_of_limits
+
+
+def test_friction_knobs_reach_the_events_and_the_table(cfg_module):
+    cfg = cfg_module.OneLegEnvCfg()
+    assert cfg.events.leg4_friction.params["static_friction_range"] == (st.PART_FRICTION, st.PART_FRICTION)
+    assert cfg.sim.physics_material.static_friction == st.TABLE_FRICTION
+    cfg.furniture.part_friction = 0.5
+    cfg.furniture.table_friction = 0.4
+    cfg.apply_friction()
+    for name in st.PART_NAMES:
+        term = getattr(cfg.events, name.replace("square_table_", "") + "_friction")
+        assert term.params["static_friction_range"] == (0.5, 0.5)
+        assert term.params["dynamic_friction_range"] == (0.5, 0.5)
+    assert cfg.sim.physics_material.static_friction == 0.4
+    assert cfg.sim.physics_material.dynamic_friction == 0.4
