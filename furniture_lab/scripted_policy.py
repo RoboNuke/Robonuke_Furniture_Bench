@@ -370,6 +370,21 @@ class SquareTableLegPart(_Part):
             raise ValueError("ScriptedState.joints is needed for the screwing states")
         return float(s.joints[6])
 
+    def _leg_face_yaw(self, leg_pose_tag: np.ndarray) -> float:
+        """World yaw of one face normal of the (square) leg, rad; the others are +k*90 deg."""
+        n = (APRIL_TO_ROBOT @ leg_pose_tag)[:3, 0]  # OBJ x: a cross-section axis (y is the leg's axis)
+        return float(np.arctan2(n[1], n[0]))
+
+    def _regrasp_q7_goal(self, s: ScriptedState, ee_pose, leg_pose_tag) -> float:
+        """Joint-7 value for the regrasp: the hand yaw at which the finger pads are flat on the
+        leg's faces (hand yaw = face yaw + k*90 deg) that puts joint 7 nearest its -limit
+        while staying q7_margin inside it. +q7 = -world yaw."""
+        psi_now = self._yaw(ee_pose[:3, :3])
+        dmax = self._q7(s) - (self.Q7_MIN + self.q7_margin)  # the most the yaw may grow
+        d = (self._leg_face_yaw(leg_pose_tag) - psi_now) % (np.pi / 2)  # smallest admissible growth
+        d += np.floor((dmax - d) / (np.pi / 2)) * (np.pi / 2)  # the largest admissible one <= dmax
+        return self._q7(s) - d
+
     def _yaw_toward(self, s: ScriptedState, ee_pose, q7_goal: float) -> Tuple[float, float]:
         """World yaw target that moves joint 7 toward ``q7_goal`` by at most ``yaw_step_deg``
         this step (+q7 is -world yaw, verified by FK), and the remaining joint travel (rad)."""
@@ -508,11 +523,11 @@ class SquareTableLegPart(_Part):
                 next_state = "pre_grasp"
         elif self._state == "pre_grasp":
             # hover above the leg's centre and wind the open hand back toward joint 7's -limit,
-            # so the coming grasp has the most tightening travel
-            hole = (a2r @ table_pose @ self.default_assembled_pose)[:3, 3]
+            # stopping at the last yaw where the finger pads are flat on the leg's faces, so
+            # the coming grasp is square and has the most tightening travel
             target_pos = (a2r @ leg_pose[:4, 3])[:3].copy()
             target_pos[2] += self.grasp_margin_z + self.hover_dz
-            yaw, remaining = self._yaw_toward(s, ee_pose, self.Q7_MIN + self.q7_margin)
+            yaw, remaining = self._yaw_toward(s, ee_pose, self._regrasp_q7_goal(s, ee_pose, leg_pose))
             target = hom(self._down(yaw), target_pos)
             if abs(remaining) < 0.05 and self.satisfy(ee_pose, target, pos_error_threshold=0.01, ori_error_threshold=0.3, max_len=60):
                 next_state = "grasp_lower"

@@ -118,6 +118,9 @@ def test_regrasp_winds_back_then_screws_with_the_wrist_only():
             assert gripper == -1 and abs(goal_pos[2] - (leg_c[2] + leg.hover_dz)) < 1e-9  # open, hovering
         if state == "screw_grasp" and q7_at_grasp is None:
             q7_at_grasp = s.joints[6]
+            # finger pads flat on a face of the square leg: hand yaw = face yaw mod 90 deg
+            face = np.degrees(leg._leg_face_yaw(s.parts_tag["square_table_leg4"]))
+            assert abs(((_yaw(s.ee_rot) - face) % 90.0 + 45.0) % 90.0 - 45.0) < 1e-6
         if state == "screw":
             screw_steps += 1
             assert np.allclose(goal_pos[:2], hole[:2])  # on the hole axis
@@ -128,11 +131,12 @@ def test_regrasp_winds_back_then_screws_with_the_wrist_only():
             break
         _track(s, goal_pos, goal_rot, gripper, leg)
     assert seen == ["pre_grasp", "grasp_lower", "screw_grasp", "screw_align", "screw", "release"]
-    assert abs(q7_at_grasp - (leg.Q7_MIN + leg.q7_margin)) < 0.06  # wound back before the grasp
+    # wound back before the grasp: within one face step (90 deg) of the -limit, never past it
+    assert leg.Q7_MIN + leg.q7_margin - 0.06 <= q7_at_grasp < leg.Q7_MIN + leg.q7_margin + np.pi / 2
     assert s.joints[6] > leg.Q7_MAX - leg.q7_margin - 0.06  # tightened to the other end
-    assert np.degrees(s.joints[6] - q7_at_grasp) > 290  # one grasp, ~300 deg of screwing
+    assert np.degrees(s.joints[6] - q7_at_grasp) > 200  # one grasp, 200-300 deg of screwing
     assert max_yaw_step <= leg.yaw_step_deg + 1e-6
-    assert screw_steps >= 290 / leg.yaw_step_deg
+    assert screw_steps >= 200 / leg.yaw_step_deg
 
 
 def test_screw_ends_when_joint7_stops_advancing():
@@ -146,3 +150,18 @@ def test_screw_ends_when_joint7_stops_advancing():
             break
         s.ee_pos = goal_pos.copy()  # position tracks, the wrist does not turn
     assert leg._state == "release" and s.joints[6] == -2.5
+
+
+def test_regrasp_yaw_is_square_to_the_leg_and_nearest_the_limit():
+    leg = sp.OneLegScriptedPolicy(seed=0, noise=False).leg
+    for leg_yaw_deg in (0.0, 17.0, -40.0, 85.0):
+        for q7 in (0.3, -1.0, 2.0):
+            s = _state(ee_pos=(0.45, 0.03, 0.09), q7=q7)
+            # stand the leg up over the hole, faces at leg_yaw (OBJ y = leg axis, x and z the faces)
+            R = sp.rot_mat((np.pi / 2, 0, leg_yaw_deg * np.pi / 180))
+            s.parts_tag["square_table_leg4"] = sp.ROBOT_TO_APRIL @ sp.hom(R, np.array([0.45, 0.03, 0.05]))
+            face = leg._leg_face_yaw(s.parts_tag["square_table_leg4"])
+            goal = leg._regrasp_q7_goal(s, s.ee_pose, s.parts_tag["square_table_leg4"])
+            yaw_at_goal = leg._yaw(s.ee_rot) - (goal - q7)
+            assert abs(((yaw_at_goal - face) % (np.pi / 2) + np.pi / 4) % (np.pi / 2) - np.pi / 4) < 1e-9
+            assert leg.Q7_MIN + leg.q7_margin - 1e-9 <= goal < leg.Q7_MIN + leg.q7_margin + np.pi / 2
