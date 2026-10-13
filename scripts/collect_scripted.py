@@ -18,9 +18,8 @@ upstream's ``scripted_timeout`` of 600 steps (failure). With ``--record`` every 
 filmed: a success keeps its video beside its pkl, a failure keeps it under ``fails/`` only
 with ``--save_failure``.
 
-To end a rollout early as a failure: ``K`` in the viewport window (click it first so it has
-focus) or ``k`` + Enter in the terminal; ``L`` in the viewport or ``l`` + Enter in the
-terminal stops collecting after the current attempt is filed.
+Not headless, with the viewport window focused: ``k`` makes the current rollout fail now,
+``l`` quits immediately (the current attempt is discarded).
 """
 
 import argparse
@@ -121,55 +120,39 @@ class Recorder:
 
 
 class AbortKeys:
-    """End a rollout early (filed as a failure) or stop collecting.
-
-    Two routes: in the viewport window (click it first), ``K`` aborts and ``L`` stops after the
-    current attempt -- keys Kit leaves unbound (``F`` is "frame selection", which flies the
-    camera into the table, ``Q`` the select tool); or in the terminal, type ``k`` / ``l`` and
-    Enter. Headless only the terminal route exists."""
+    """Keys in the viewport window (click it so it has focus): ``k`` = this rollout fails now,
+    ``l`` = quit immediately. No-op when headless."""
 
     def __init__(self) -> None:
-        self.abort = False
+        self.fail = False
         self.quit = False
         self._sub = None
-        if not args.headless:
-            try:
-                import carb
-                import omni.appwindow
+        if args.headless:
+            return
+        try:
+            import carb
+            import omni.appwindow
 
-                window = omni.appwindow.get_default_app_window()
-                keyboard = window.get_keyboard() if hasattr(window, "get_keyboard") else window.getKeyboard()
-                self._input = carb.input.acquire_input_interface()
-                self._press = carb.input.KeyboardEventType.KEY_PRESS
-                self._sub = self._input.subscribe_to_keyboard_events(keyboard, self._on_key)
-                print("[collect] viewport keys (click it first): K = abort rollout as a failure, L = stop after this attempt", flush=True)
-            except Exception as e:  # no window, different carb API ...
-                print(f"[collect] viewport abort keys unavailable: {e}", flush=True)
-        if sys.stdin is not None and sys.stdin.isatty():
-            import threading
-
-            threading.Thread(target=self._stdin_loop, daemon=True).start()
-            print("[collect] terminal keys: type k + Enter = abort rollout as a failure, l + Enter = stop after this attempt", flush=True)
+            window = omni.appwindow.get_default_app_window()
+            keyboard = window.get_keyboard() if hasattr(window, "get_keyboard") else window.getKeyboard()
+            self._input = carb.input.acquire_input_interface()
+            self._press = carb.input.KeyboardEventType.KEY_PRESS
+            self._sub = self._input.subscribe_to_keyboard_events(keyboard, self._on_key)
+            print("[collect] viewport keys: k = this rollout fails now, l = quit", flush=True)
+        except Exception as e:  # no window, different carb API ...
+            print(f"[collect] viewport keys unavailable: {e}", flush=True)
 
     def _on_key(self, event, *_args, **_kwargs) -> bool:
         if event.type == self._press:
-            name = event.input.name
+            name = event.input.name  # carb names keys by their unshifted uppercase letter
             if name == "K":
-                self.abort = True
+                self.fail = True
             elif name == "L":
                 self.quit = True
         return True
 
-    def _stdin_loop(self) -> None:
-        for line in sys.stdin:
-            cmd = line.strip().lower()
-            if cmd == "k":
-                self.abort = True
-            elif cmd == "l":
-                self.quit = True
-
     def new_attempt(self) -> None:
-        self.abort = False
+        self.fail = False
 
 
 def assembled_now(env) -> bool:
@@ -308,9 +291,17 @@ def main() -> None:
         aborted = False
         out_of_limits = False
         for t in range(args.timeout):
-            if keys.abort:
+            if keys.quit:
+                print("[collect] quit by key", flush=True)
+                if recorder is not None:
+                    recorder.close()
+                    tmp_video.unlink(missing_ok=True)
+                env.close()
+                app.close()
+                sys.exit(0)
+            if keys.fail:
                 aborted = True
-                print(f"[collect] step {t:4d}: aborted by key -> failure", flush=True)
+                print(f"[collect] step {t:4d}: failed by key", flush=True)
                 break
             if bool(part_out_of_limits(env)[0].item()):
                 out_of_limits = True
@@ -369,7 +360,7 @@ def main() -> None:
             "success": success,
             "furniture": "one_leg",
             "error": aborted or out_of_limits,
-            "error_description": "aborted by key" if aborted else ("part out of position limits" if out_of_limits else ""),
+            "error_description": "failed by key" if aborted else ("part out of position limits" if out_of_limits else ""),
         }
         if success:
             stamp = time.strftime("%Y-%m-%d-%H:%M:%S")
@@ -393,7 +384,7 @@ def main() -> None:
             elif recorder is not None:
                 tmp_video.unlink(missing_ok=True)
         if keys.quit:
-            print("[collect] stopped by key", flush=True)
+            print("[collect] quit by key", flush=True)
             break
         if attempt >= 3 * args.num_demos + 3:
             print("[collect] giving up: too many failures", flush=True)
