@@ -189,6 +189,42 @@ def _watch(env, leg, top, seated_pos, steps: int, zero: torch.Tensor, label: str
         )
 
 
+def print_physics(env, cfg) -> None:
+    """What PhysX actually holds for every part (env 0): mass, inertia, CoM, friction -- the
+    USDs carry none of it, the startup events set it, so this is the check that they did."""
+    from furniture_lab.tasks.furniture.square_table import PARTS
+
+    print("[physics] part                mass kg (cfg)   inertia diag kg m^2            com m (body)        friction s/d")
+    for part in PARTS:
+        if part.name not in cfg.furniture.part_names:
+            continue
+        view = env.scene[part.name].root_physx_view
+        m = float(view.get_masses()[0])
+        I = view.get_inertias()[0].reshape(3, 3).diagonal().tolist()
+        com = view.get_coms()[0, :3].tolist()
+        try:
+            mat = view.get_material_properties()[0, 0].tolist()  # (static, dynamic, restitution)
+            fr = f"{mat[0]:.2f}/{mat[1]:.2f}"
+        except Exception:
+            fr = "?"
+        flag = "" if abs(m - part.mass) < 1e-4 else "   <-- NOT the configured mass"
+        print(
+            f"[physics] {part.name:20s} {m:7.4f} ({part.mass:.4f})  "
+            f"[{I[0]:.2e} {I[1]:.2e} {I[2]:.2e}]  [{com[0]:+.4f} {com[1]:+.4f} {com[2]:+.4f}]  {fr}{flag}"
+        )
+    sim = env.sim.cfg
+    px = sim.physx
+    print(
+        f"[physics] dt {sim.dt} x decimation {cfg.decimation} = {sim.dt * cfg.decimation:.4f} s/step, "
+        f"solver {'TGS' if px.solver_type == 1 else 'PGS'}, bounce thr {px.bounce_threshold_velocity}, "
+        f"friction offset {px.friction_offset_threshold}, corr dist {px.friction_correlation_distance}, "
+        f"gpu {sim.use_gpu_pipeline if hasattr(sim, 'use_gpu_pipeline') else sim.device}"
+    )
+    robot = env.scene["robot"]
+    rm = robot.root_physx_view.get_masses()[0]
+    print(f"[physics] robot link masses kg: {[round(float(v), 3) for v in rm]}  (gravity off on the arm: {cfg.scene.robot.spawn.rigid_props.disable_gravity})")
+
+
 def main() -> None:
     cfg = load_cfg_from_registry(args.task, "env_cfg_entry_point")
     cfg.scene.num_envs = args.num_envs
@@ -228,6 +264,7 @@ def main() -> None:
         recorder = Recorder(env)
     print(f"[smoke] task {args.task}: {env.num_envs} envs, mesh frame {cfg.furniture.mesh_frame}")
     print(f"[smoke] obs policy {tuple(obs['policy'].shape)}  action {env.action_manager.total_action_dim}")
+    print_physics(env, cfg)
 
     zero = torch.zeros(env.num_envs, env.action_manager.total_action_dim, device=env.device)
     for i in range(args.steps):
