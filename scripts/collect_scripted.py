@@ -1,7 +1,8 @@
 """Collect ``one_leg`` demos in this env with FurnitureBench's scripted policy (ported).
 
-    python scripts/collect_scripted.py --headless --num_demos 1 --out_dir ~/fb_demos [--video demo.mp4]
-    # -> ~/fb_demos/one_leg/<stamp>/<stamp>.pkl   (FurnitureBench's layout and pkl format)
+    python scripts/collect_scripted.py --headless --num_demos 1 --out_dir ~/fb_demos [--record] [--save_failure]
+    # success -> ~/fb_demos/one_leg/<stamp>/<stamp>.pkl  (+ recording.mp4 with --record)
+    # failure -> ~/fb_demos/one_leg/fails/fail<n>.pkl     (+ fail<n>.mp4) with --save_failure
 
 The policy (``furniture_lab/scripted_policy.py``) is upstream's state machine, fed this env's
 state in upstream's representation and driving the task's own ``pose_rel`` action, so what
@@ -13,7 +14,9 @@ it records is what a policy trained here would output: the 8-D FurnitureBench ac
 -- readable by ``furniture_lab.demos.load_demo`` and ``scripts/replay_demo.py``.
 
 A demo ends when the leg is assembled and the hand has lifted clear (success), or at
-upstream's ``scripted_timeout`` of 600 steps (failure, saved only with ``--save_failure``).
+upstream's ``scripted_timeout`` of 600 steps (failure). With ``--record`` every attempt is
+filmed: a success keeps its video beside its pkl, a failure keeps it under ``fails/`` only
+with ``--save_failure``.
 """
 
 import argparse
@@ -33,15 +36,15 @@ parser.add_argument("--num_demos", type=int, default=1)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--no_noise", action="store_true", help="disable upstream's target/action noise")
 parser.add_argument("--timeout", type=int, default=600, help="upstream's scripted_timeout for one_leg")
-parser.add_argument("--save_failure", action="store_true")
-parser.add_argument("--video", type=str, default=None, metavar="FILE.mp4", help="record the first demo")
+parser.add_argument("--save_failure", action="store_true", help="keep failed attempts (pkl + video) under fails/")
+parser.add_argument("--record", action="store_true", help="film every attempt (headless ok)")
 parser.add_argument("--fps", type=int, default=20)
 parser.add_argument("--cam", type=str, default="0.95,0.45,0.35")
 parser.add_argument("--look", type=str, default="0.54,0.0,0.03")
 parser.add_argument("--print_every", type=int, default=25)
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
-if args.video:
+if args.record:
     args.enable_cameras = True
 app = AppLauncher(args).app
 
@@ -187,7 +190,7 @@ def main() -> None:
     cfg = OneLegReplayRelCfg()
     cfg.scene.num_envs = 1
     cfg.furniture.log_resets = True
-    if args.video:
+    if args.record:
         cfg.scene.clone_in_fabric = False
         setattr(
             cfg.scene,
@@ -205,8 +208,11 @@ def main() -> None:
     env = AssemblyEnv(cfg)
     part_names = list(cfg.furniture.part_names)
     out_root = Path(args.out_dir).expanduser() / "one_leg"
+    fails_dir = out_root / "fails"
     saved = 0
     attempt = 0
+    # continue the fail<n> numbering across runs
+    failures = max([int(f.stem[4:]) for f in fails_dir.glob("fail*.pkl") if f.stem[4:].isdigit()] + [0])
     while saved < args.num_demos:
         attempt += 1
         env.reset()
@@ -214,7 +220,8 @@ def main() -> None:
         zero[0, -1] = 1.0  # gripper open
         for _ in range(5):
             env.step(zero)  # let the parts settle after the reset
-        recorder = Recorder(env, args.video) if (args.video and attempt == 1) else None
+        tmp_video = out_root / f".attempt{attempt}.mp4"
+        recorder = Recorder(env, tmp_video) if args.record else None
         policy = sp.OneLegScriptedPolicy(seed=args.seed + attempt - 1, noise=not args.no_noise)
         obs_list, acts, rews, skills = [], [], [], []
         assembled_step = None
@@ -258,24 +265,37 @@ def main() -> None:
         )
         if recorder is not None:
             recorder.close()
-        if success or args.save_failure:
+        data = {
+            "observations": obs_list,
+            "actions": acts,
+            "rewards": rews,
+            "skills": skills,
+            "success": success,
+            "furniture": "one_leg",
+            "error": False,
+            "error_description": "",
+        }
+        if success:
             stamp = time.strftime("%Y-%m-%d-%H:%M:%S")
             demo_dir = out_root / stamp
             demo_dir.mkdir(parents=True, exist_ok=True)
-            data = {
-                "observations": obs_list,
-                "actions": acts,
-                "rewards": rews,
-                "skills": skills,
-                "success": success,
-                "furniture": "one_leg",
-                "error": False,
-                "error_description": "",
-            }
             with open(demo_dir / f"{stamp}.pkl", "wb") as f:
                 pickle.dump(data, f)
-            print(f"[collect] saved {demo_dir / (stamp + '.pkl')}", flush=True)
+            if recorder is not None:
+                tmp_video.replace(demo_dir / "recording.mp4")
+            print(f"[collect] saved {demo_dir / (stamp + '.pkl')}" + (" + recording.mp4" if recorder else ""), flush=True)
             saved += 1
+        else:
+            failures += 1
+            if args.save_failure:
+                fails_dir.mkdir(parents=True, exist_ok=True)
+                with open(fails_dir / f"fail{failures}.pkl", "wb") as f:
+                    pickle.dump(data, f)
+                if recorder is not None:
+                    tmp_video.replace(fails_dir / f"fail{failures}.mp4")
+                print(f"[collect] saved failure {fails_dir / f'fail{failures}.pkl'}" + (f" + fail{failures}.mp4" if recorder else ""), flush=True)
+            elif recorder is not None:
+                tmp_video.unlink(missing_ok=True)
         if attempt >= 3 * args.num_demos + 3:
             print("[collect] giving up: too many failures", flush=True)
             break
