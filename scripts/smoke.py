@@ -5,6 +5,7 @@
     python scripts/smoke.py --num_envs 4 --steps 200         # with the viewer
     python scripts/smoke.py --headless --teleport --out seat.mp4 --num_envs 1 --yaws 0,90
     python scripts/smoke.py --headless --teleport --drop 0.03 --out drop.mp4 --num_envs 1
+    python scripts/smoke.py --headless --resets 30 --out resets.mp4 --num_envs 1   # the reset distribution
 
 Needs no trained run and no package config: it goes straight to the gym registry. What it
 checks: the scene spawns, observation/action sizes, nothing explodes under zero actions, and
@@ -33,6 +34,8 @@ parser.add_argument("--grip_stiffness", type=float, default=None, help="finger d
 parser.add_argument("--grip_force", type=float, default=None, help="finger effort limit N (default 30; Isaac Lab's Franka 200)")
 parser.add_argument("--table_friction", type=float, default=None, help="table/obstacle friction (FurnitureSim: 0.10)")
 parser.add_argument("--steps", type=int, default=50)
+parser.add_argument("--resets", type=int, default=0, help="film N resets of env 0 (the reset distribution), --hold steps each, to --out")
+parser.add_argument("--hold", type=int, default=10, help="env steps to show each reset for (with --resets)")
 parser.add_argument("--teleport", action="store_true", help="seat leg 4 in the top, then check")
 parser.add_argument("--hole", type=int, default=0, help="which of the 4 holes to seat it in")
 parser.add_argument(
@@ -281,6 +284,21 @@ def main() -> None:
     print_physics(env, cfg)
 
     zero = torch.zeros(env.num_envs, env.action_manager.total_action_dim, device=env.device)
+    if args.resets:
+        # the reset distribution: reset, let the parts settle, hold the frame, repeat
+        for i in range(args.resets):
+            env.reset()
+            if recorder is not None:
+                recorder.caption = f"reset {i + 1} / {args.resets}"
+            for _ in range(args.hold):
+                physics_steps(env, 1) if recorder is not None else env.step(zero)
+            pos, _ = parts_pose_w(env)
+            xy = (pos[0, :, :2] - env.scene.env_origins[0, None, :2]).tolist()
+            print(f"[smoke] reset {i + 1:3d}: parts xy " + "  ".join(f"({x:.3f},{y:+.3f})" for x, y in xy), flush=True)
+        if recorder is not None:
+            recorder.close()
+        env.close()
+        return
     for i in range(args.steps):
         obs, rew, terminated, truncated, extras = env.step(zero)
         if i % 10 == 0 or i == args.steps - 1:
