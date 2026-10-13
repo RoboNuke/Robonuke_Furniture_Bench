@@ -332,16 +332,18 @@ class SquareTableLegPart(_Part):
         # -- screwing (this port; upstream yaws -95 deg per grasp from yaw 0)
         #: the wrist cannot spin: panda_joint7 is limited to +-2.8973 rad. Each grasp winds
         #: the open hand back to Q7_MIN + margin, then tightens to Q7_MAX - margin.
-        self.q7_margin = 0.15
+        self.q7_margin = 0.08
         #: yaw commanded per step (deg); the controller is led by at most this much. 4.5 deg
         #: per 20 Hz step = 90 deg/s, the rate scripts/screw_calib.py showed screws the leg
         #: in with no slip and no wandering; upstream's one-step -95 deg makes this OSC lurch
         #: ~3 cm and pull the leg out (fail1/4/5.pkl)
         self.yaw_step_deg = 4.5
+        #: yaw per step while winding the OPEN hand back over the leg (free motion): faster
+        self.wind_step_deg = 9.0
         #: press on the thread while turning (m per step, upstream 0.005)
         self.screw_press = 0.005
         #: hover above the leg centre by this much while re-orienting the open hand
-        self.hover_dz = 0.06
+        self.hover_dz = 0.04
         self._q7_prev: Optional[float] = None
         self._stall = 0
         # -- insertion (this port). Upstream opens the fingers with the leg at tag z + 0.084,
@@ -398,11 +400,13 @@ class SquareTableLegPart(_Part):
         d += np.floor((dmax - d) / (np.pi / 2)) * (np.pi / 2)  # the largest admissible one <= dmax
         return self._q7(s) - d
 
-    def _yaw_toward(self, s: ScriptedState, ee_pose, q7_goal: float) -> Tuple[float, float]:
-        """World yaw target that moves joint 7 toward ``q7_goal`` by at most ``yaw_step_deg``
-        this step (+q7 is -world yaw, verified by FK), and the remaining joint travel (rad)."""
+    def _yaw_toward(self, s: ScriptedState, ee_pose, q7_goal: float, step_deg: Optional[float] = None) -> Tuple[float, float]:
+        """World yaw target that moves joint 7 toward ``q7_goal`` by at most ``step_deg``
+        (default ``yaw_step_deg``) this step (+q7 is -world yaw, verified by FK), and the
+        remaining joint travel (rad)."""
+        cap = np.radians(self.yaw_step_deg if step_deg is None else step_deg)
         remaining = q7_goal - self._q7(s)
-        step = float(np.clip(remaining, -np.radians(self.yaw_step_deg), np.radians(self.yaw_step_deg)))
+        step = float(np.clip(remaining, -cap, cap))
         return self._yaw(ee_pose[:3, :3]) - step, remaining
 
     @staticmethod
@@ -561,7 +565,7 @@ class SquareTableLegPart(_Part):
             # the coming grasp is square and has the most tightening travel
             target_pos = (a2r @ leg_pose[:4, 3])[:3].copy()
             target_pos[2] += self.grasp_margin_z + self.hover_dz
-            yaw, remaining = self._yaw_toward(s, ee_pose, self._regrasp_q7_goal(s, ee_pose, leg_pose))
+            yaw, remaining = self._yaw_toward(s, ee_pose, self._regrasp_q7_goal(s, ee_pose, leg_pose), self.wind_step_deg)
             target = hom(self._down(yaw), target_pos)
             if abs(remaining) < 0.05 and self.satisfy(ee_pose, target, pos_error_threshold=0.01, ori_error_threshold=0.3, max_len=60):
                 next_state = "grasp_lower"

@@ -121,6 +121,9 @@ def test_regrasp_winds_back_then_screws_with_the_wrist_only():
             # finger pads flat on a face of the square leg: hand yaw = face yaw mod 90 deg
             face = np.degrees(leg._leg_face_yaw(s.parts_tag["square_table_leg4"]))
             assert abs(((_yaw(s.ee_rot) - face) % 90.0 + 45.0) % 90.0 - 45.0) < 1e-6
+        if state == "pre_grasp":
+            d = abs(((_yaw(goal_rot) - _yaw(s.ee_rot) + 180) % 360) - 180)
+            assert d <= leg.wind_step_deg + 1e-6
         if state == "screw":
             screw_steps += 1
             assert np.allclose(goal_pos[:2], hole[:2])  # on the hole axis
