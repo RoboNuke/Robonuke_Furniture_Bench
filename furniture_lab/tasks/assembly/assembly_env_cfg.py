@@ -371,7 +371,9 @@ class FBActionsCfg:
     """Upstream's 8-d action ``[dpos, dquat xyzw (EE frame), gripper]`` driving the task's own
     OSC and gripper terms (``mdp.FurnitureBenchAction``)."""
 
-    fb = mdp.FurnitureBenchActionCfg(asset_name="robot", arm=ActionsCfg.arm, gripper=ActionsCfg.gripper)
+    # the task's own terms, from an instance: a configclass turns its class attributes into
+    # dataclass fields, so ``ActionsCfg.arm`` does not exist on the class
+    fb = mdp.FurnitureBenchActionCfg(asset_name="robot", arm=ActionsCfg().arm, gripper=ActionsCfg().gripper)
 
 
 @configclass

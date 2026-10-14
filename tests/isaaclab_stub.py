@@ -45,10 +45,12 @@ def configclass(cls):
             if base is not object and "__init__" in vars(base) and not getattr(base, "_stub_cc", False):
                 base.__init__(self)
         for base in reversed(cls.__mro__):
-            for key, value in vars(base).items():
-                if key.startswith("__") or isinstance(value, (type, types.FunctionType, property)):
-                    continue  # dunders, nested cfg classes and methods are not fields
-                setattr(self, key, value)
+            fields = getattr(base, "_stub_fields", None)
+            if fields is None:  # a plain base: its class attributes
+                fields = {k: v for k, v in vars(base).items()
+                          if not k.startswith("__") and not isinstance(v, (type, types.FunctionType, property))}
+            for key, value in fields.items():
+                setattr(self, key, __import__("copy").deepcopy(value))
         for key, value in kwargs.items():
             setattr(self, key, value)
         post = getattr(self, "__post_init__", None)
@@ -57,6 +59,15 @@ def configclass(cls):
 
     if "__init__" not in vars(cls):
         cls.__init__ = __init__
+    # like the real decorator (a dataclass with default factories), the class keeps no
+    # attribute for a field: ``Cfg.field`` is an AttributeError, ``Cfg().field`` the value
+    cls._stub_fields = {
+        key: value for key, value in vars(cls).items()
+        if not key.startswith("__") and not isinstance(value, (type, types.FunctionType, property))
+        and key not in ("copy", "replace", "_stub_cc", "_stub_fields")
+    }
+    for key in cls._stub_fields:
+        delattr(cls, key)
     cls._stub_cc = True
     cls.copy = lambda self: __import__("copy").deepcopy(self)
     return cls
