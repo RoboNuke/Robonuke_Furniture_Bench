@@ -45,6 +45,8 @@ parser.add_argument("--no_noise", action="store_true", help="disable upstream's 
 parser.add_argument("--rot_speed", type=float, default=90.0, help="deg/s of wrist rotation while screwing (calibrated: 90)")
 parser.add_argument("--wind_speed", type=float, default=180.0, help="deg/s of wrist rotation while winding the open hand back")
 parser.add_argument("--insert_lift", type=float, default=0.0, help="m to raise the hold pose above where the leg stopped before opening (0.003 = 3 mm, no press)")
+parser.add_argument("--insert_floor", type=float, default=0.003, help="servo: m above the seat the leg is never lowered below")
+parser.add_argument("--insert_stop", type=float, default=0.0005, help="servo: the leg counts as stopped when it dropped less than this (m) over 3 steps")
 parser.add_argument("--insert_rate", type=float, default=0.002, help="m per step the held leg is lowered until it stops (also the press while lowering)")
 parser.add_argument("--screw_press", type=float, default=0.005, help="m pressed on the thread per step while screwing (upstream 0.005)")
 parser.add_argument("--timeout", type=int, default=600, help="upstream's scripted_timeout for one_leg")
@@ -320,6 +322,9 @@ def main() -> None:
                 lead_deg=args.lead,
                 press=args.screw_press,
                 insert_rate=args.insert_rate,
+                insert_floor=args.insert_floor,
+                insert_stop=args.insert_stop,
+                insert_lift=args.insert_lift,
                 wind_step_deg=args.wind_speed * env.step_dt,
                 gain=args.servo_gain if args.servo_gain is not None else (1.0 if args.sim == "resip" else 5.0),
             )

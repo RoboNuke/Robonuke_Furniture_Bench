@@ -170,6 +170,9 @@ class ServoOneLegPolicy:
         lead_deg: float = 10.0,
         press: float = 0.003,
         insert_rate: float = 0.002,
+        insert_floor: float = 0.003,
+        insert_stop: float = 0.0005,
+        insert_lift: float = 0.0,
         corner_clearance: float = -0.002,
         hover_dz: float = 0.04,
         q7_margin: float = 0.08,
@@ -195,6 +198,11 @@ class ServoOneLegPolicy:
         self.lead = np.radians(lead_deg)
         self.press = press
         self.insert_rate = insert_rate
+        #: lowering: never below seat + insert_floor; "stopped" when the leg dropped less than
+        #: insert_stop over 3 steps; the hand then holds insert_lift above where it stopped
+        self.insert_floor = insert_floor
+        self.insert_stop = insert_stop
+        self.insert_lift = insert_lift
         self.corner_clearance = corner_clearance
         self.assembled_hold_steps = assembled_hold_steps
         # phase machine
@@ -350,13 +358,15 @@ class ServoOneLegPolicy:
         elif self.phase == "leg_lower":
             # down at insert_rate until the leg's own height stops changing (the thread holds it)
             self._leg_z_hist.append(leg_pos[2])
-            z_cmd = max(leg_pos[2] - self.insert_rate, seat[2] + 0.003)
+            z_cmd = max(leg_pos[2] - self.insert_rate, seat[2] + self.insert_floor)
             tgt = np.array([seat[0], seat[1], z_cmd])
             goal_pos, goal_R, ep, er = self.servo.step(leg_pos, leg_R, tgt, upright_goal(leg_R), ee_pos, ee_R)
             h = self._leg_z_hist
-            stopped = len(h) > 3 and (h[-4] - h[-1]) < 0.0005  # the thread holds it
-            if stopped or leg_pos[2] <= seat[2] + 0.0031:
-                self.hold_pose = hom(ee_R, ee_pos)
+            stopped = len(h) > 3 and (h[-4] - h[-1]) < self.insert_stop  # the thread holds it
+            if stopped or leg_pos[2] <= seat[2] + self.insert_floor + 0.0001:
+                hold = ee_pos.copy()
+                hold[2] += self.insert_lift
+                self.hold_pose = hom(ee_R, hold)
                 self._goto("leg_settle")
         elif self.phase == "leg_settle":
             # hold until the leg has stopped moving (position and axis), then let go
