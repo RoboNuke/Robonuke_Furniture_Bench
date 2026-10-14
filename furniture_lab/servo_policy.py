@@ -175,6 +175,7 @@ class ServoOneLegPolicy:
         insert_lift: float = 0.0,
         release_dz: float = 0.05,
         upright_step_deg: float | None = None,
+        screw_upright: bool = False,
         corner_clearance: float = -0.002,
         hover_dz: float = 0.04,
         q7_margin: float = 0.08,
@@ -214,6 +215,10 @@ class ServoOneLegPolicy:
         #: orientation, at most pos_step per step -- before the regrasp moves it anywhere else
         self.release_dz = release_dz
         self.pos_step = pos_step
+        self.rot_step = np.radians(rot_step_deg)
+        #: screwing: False turns the hand about the vertical through the leg's axis and presses,
+        #: nothing else; True also servos the leg upright and onto the hole axis (the old way)
+        self.screw_upright = screw_upright
         self.corner_clearance = corner_clearance
         self.assembled_hold_steps = assembled_hold_steps
         # phase machine
@@ -402,15 +407,27 @@ class ServoOneLegPolicy:
                 self.gripper = 1.0
                 grip = 1.0
                 self._leg_yaw_u = leg_yaw(leg_R)
+                self._screw_dz = ee_pos[2] - leg_pos[2]  # the grasp height on the leg
                 self._goto("screw")
         elif self.phase == "screw":
             self._leg_yaw_u = unwrap(self._leg_yaw_u, leg_yaw(leg_R))
             self._yaw_hist.append(self._leg_yaw_u)
             # lead the leg's own yaw clockwise (tightening = -world yaw), keep it upright and
             # on the hole axis, press a little
-            tgt_R = upright_goal(leg_R, -self.lead)
-            tgt = np.array([seat[0], seat[1], leg_pos[2] - self.press])
-            goal_pos, goal_R, ep, er = self.servo.step(leg_pos, leg_R, tgt, tgt_R, ee_pos, ee_R)
+            if self.screw_upright:
+                tgt_R = upright_goal(leg_R, -self.lead)
+                tgt = np.array([seat[0], seat[1], leg_pos[2] - self.press])
+                goal_pos, goal_R, ep, er = self.servo.step(leg_pos, leg_R, tgt, tgt_R, ee_pos, ee_R)
+            else:
+                # turn only: the hand yaws clockwise about the vertical through the leg's
+                # centre (tightening = -world yaw), tilt left as it is, pressing down a little
+                Rz = get_mat([0, 0, 0], [0, 0, -self.gain * self.rot_step])[:3, :3]
+                c = np.array([leg_pos[0], leg_pos[1], ee_pos[2]])
+                goal_pos = c + Rz @ (ee_pos - c)
+                # the press is relative to the leg (the grasp height minus press), so it does
+                # not pile up while the thread holds the leg
+                goal_pos[2] = leg_pos[2] + self._screw_dz - self.press
+                goal_R = Rz @ ee_R
             q7 = float(s.joints[6]) if s.joints is not None else -np.inf
             h = self._yaw_hist
             stalled = len(h) > 8 and (h[-9] - h[-1]) < np.radians(2.0)  # < 2 deg in 8 steps
