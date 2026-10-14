@@ -112,6 +112,14 @@ put in a group (none by default, so the task ids' observations are unchanged).
 prints the estimate next to PhysX's joint reaction wrench on `panda_hand`, both as the
 external wrench on the EE in the base frame; `--csv` saves it.
 
+### Checking the FB interface against a demo
+
+`scripts/parity_check.py --demo <pkl> --headless` puts `Isaac-Furniture-OneLeg-FB-v0` into a
+demo's recorded state and compares the env's 49-d observation with the pkl's term by term
+(flagging quaternions that match only up to sign), then sends the pkl's 8-d actions
+through the FB action term one step at a time (re-synced before each) and reports the EE
+error against the demo's next step. Run it before training a policy on the demos.
+
 ## Replaying FurnitureBench demos
 
 `furniture_lab/demos.py` reads a FurnitureBench `.pkl` into this port's frames (robot-base
