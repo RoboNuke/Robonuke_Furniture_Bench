@@ -79,7 +79,7 @@ class AssemblySceneCfg(InteractiveSceneCfg):
     light = assets.light_cfg()
 
     # a mid grey, so the white parts read against it
-    table = assets.fixture_cfg("Table", frames.TABLE_SIZE, frames.TABLE_POS, TABLE_FRICTION, color=(0.35, 0.35, 0.35))
+    table = assets.fixture_cfg("Table", frames.TABLE_SIZE, frames.TABLE_POS, TABLE_FRICTION, color=(0.08, 0.08, 0.08))
     obstacle_front = assets.fixture_cfg(
         "ObstacleFront", frames.OBSTACLE_FRONT_SIZE, frames.OBSTACLE_FRONT_POS, color=(0.3, 0.3, 0.3)
     )
@@ -131,6 +131,8 @@ class FurnitureCfg:
     gripper_stiffness: float = 600.0  # N/m: ~9 N squeeze on a 30 mm leg
     gripper_damping: float = 40.0
     gripper_effort_limit: float = 30.0  # N per finger
+    #: the work table's colour (RGB 0-1): dark grey, so the parts and the robot stand out
+    table_color: Tuple[float, float, float] = (0.08, 0.08, 0.08)
     #: the external EE wrench estimated from the joint torques every physics substep
     #: (``assembly/wrench.py``; ``env.wrench.filtered``). EMA factor (Forge: 0.25);
     #: Gaussian noise std on each joint torque before the projection (N m: one value or
@@ -306,6 +308,10 @@ class AssemblyEnvCfg(ManagerBasedRLEnvCfg):
             raise ValueError("furniture.task is unset: use OneLegEnvCfg or SquareTableEnvCfg")
         self.apply_friction()
         self.apply_gripper()
+
+    def apply_visuals(self) -> None:
+        """Push ``furniture.table_color`` into the table's material."""
+        self.scene.table.spawn.visual_material.diffuse_color = tuple(float(c) for c in self.furniture.table_color)
 
     def apply_gripper(self) -> None:
         """Push ``furniture.gripper_*`` into the finger actuator (call again after changing them)."""

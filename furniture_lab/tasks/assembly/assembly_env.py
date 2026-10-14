@@ -29,6 +29,9 @@ from .wrench import JointTorqueWrench
 
 
 class AssemblyEnv(ManagerBasedRLEnv):
+    #: how a recorder names each termination term (robonuke_rl_core.recording.termination_causes)
+    termination_labels = {"success": "success", "part_out_of_limits": "out of bounds", "time_out": "timeout"}
+
     def __init__(self, cfg, render_mode: str | None = None, **kwargs):
         self._episode_success = None
         # furniture.part_friction / table_friction / gripper_* are plain fields a config file
@@ -36,6 +39,7 @@ class AssemblyEnv(ManagerBasedRLEnv):
         # the actuator here, where the scene has not been built yet
         cfg.apply_friction()
         cfg.apply_gripper()
+        cfg.apply_visuals()
         super().__init__(cfg, render_mode, **kwargs)
         self._episode_success = torch.zeros(self.num_envs, device=self.device)
         self.wrench = JointTorqueWrench(self, cfg.furniture)

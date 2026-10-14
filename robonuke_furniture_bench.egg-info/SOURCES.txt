@@ -9,10 +9,13 @@ furniture_lab/tasks/assembly/__init__.py
 furniture_lab/tasks/assembly/assembly_env.py
 furniture_lab/tasks/assembly/assembly_env_cfg.py
 furniture_lab/tasks/assembly/replay_env_cfg.py
+furniture_lab/tasks/assembly/wrench.py
 furniture_lab/tasks/assembly/mdp/__init__.py
+furniture_lab/tasks/assembly/mdp/actions.py
 furniture_lab/tasks/assembly/mdp/events.py
 furniture_lab/tasks/assembly/mdp/observations.py
 furniture_lab/tasks/assembly/mdp/rewards.py
+furniture_lab/tasks/assembly/mdp/rot6d.py
 furniture_lab/tasks/assembly/mdp/state.py
 furniture_lab/tasks/assembly/mdp/terminations.py
 furniture_lab/tasks/furniture/__init__.py
@@ -30,6 +33,8 @@ tests/test_assembly.py
 tests/test_catalog.py
 tests/test_cfg_wiring.py
 tests/test_demos.py
+tests/test_fb_action.py
 tests/test_frames.py
 tests/test_scripted_policy.py
 tests/test_servo_policy.py
+tests/test_wrench.py
