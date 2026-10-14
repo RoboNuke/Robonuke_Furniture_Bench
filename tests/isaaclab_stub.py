@@ -136,7 +136,7 @@ def install():
         "isaaclab.utils.math",
         **{n: (lambda *a, **k: None) for n in (
             "subtract_frame_transforms", "combine_frame_transforms", "quat_apply_inverse",
-            "quat_from_euler_xyz", "quat_mul", "axis_angle_from_quat", "quat_conjugate",
+            "quat_from_euler_xyz", "quat_mul", "axis_angle_from_quat", "quat_conjugate", "quat_apply",
         )},
     )
     # ---- envs and stock mdp

@@ -221,3 +221,31 @@ def test_seat_tolerance_follows_the_mesh_frame():
     pos = torch.zeros(1, 5, 3)
     pos[0, 4] = targets[0, 0] + torch.tensor([0.008, 0.0, 0.0])
     assert bool(pairs_assembled(pos, ident.expand(1, 5, 4).clone(), pairs, targets, thr, 0.94)[0, 0])
+
+
+def test_strict_tracker_needs_the_hold_and_a_released_clear_hand():
+    """The collector's verdict as a latch: hold_steps consecutive steps, hand clear."""
+    pairs = st.ONE_LEG_PAIRS
+    tracker = AssemblyTracker(
+        2, pairs, st.rel_pose_targets(pairs, "obj"), st.ASSEMBLED_POS_THRESHOLD, st.ORI_BOUND, "cpu", hold_steps=3
+    )
+    pos = torch.zeros(2, 5, 3)
+    quat = torch.tensor([1.0, 0, 0, 0]).repeat(2, 5, 1)
+    pos[:, 4] = torch.tensor([0.05625, 0.046875, 0.05625])  # both seated
+    held = torch.tensor([False, True])  # env 0 still gripping, env 1 let go
+    assert tracker.update(pos, quat, held).tolist() == [0.0, 0.0]
+    assert tracker.update(pos, quat, held).tolist() == [0.0, 0.0]
+    assert tracker.now.all()  # the raw check passes for both all along
+    assert tracker.update(pos, quat, held).tolist() == [0.0, 1.0]  # third step clear: env 1
+    assert tracker.all_assembled().tolist() == [False, True]
+    # env 0 lets go, but a single frame out of the seat restarts its count
+    clear = torch.tensor([True, True])
+    tracker.update(pos, quat, clear)
+    pos[0, 4, 1] += 0.1
+    tracker.update(pos, quat, clear)
+    pos[0, 4, 1] -= 0.1
+    assert tracker.update(pos, quat, clear).tolist() == [0.0, 0.0]
+    assert tracker.update(pos, quat, clear).tolist() == [0.0, 0.0]
+    assert tracker.update(pos, quat, clear).tolist() == [1.0, 0.0]
+    tracker.reset(torch.tensor([0]))
+    assert tracker.streak[0].item() == 0 and not tracker.all_assembled()[0]

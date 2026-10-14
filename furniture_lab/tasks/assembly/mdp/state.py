@@ -6,6 +6,15 @@ manager API gives each term only the env. So the :class:`AssemblyTracker` hangs 
 and every term reaches it through :func:`tracker`, which also updates it **once per env
 step**, whichever term asks first (the termination manager runs before the reward manager
 in ``ManagerBasedRLEnv.step``).
+
+Success is as strict as the demo collector's verdict (``scripts/collect_scripted.py``): a
+pair latches only after it has tested assembled for ``furniture.success_hold_steps``
+consecutive steps with the hand released (finger width above
+``furniture.success_release_width``) and clear (the TCP farther than
+``furniture.success_clearance`` from the pair's second part) -- i.e. it stays put once the
+robot has let go, instead of counting a single frame it passes through or is held in.
+``success_hold_steps: 1`` with ``success_require_release: false`` is FurnitureBench's
+single-step latch.
 """
 
 from __future__ import annotations
@@ -14,7 +23,7 @@ from typing import TYPE_CHECKING, Tuple
 
 import torch
 
-from isaaclab.utils.math import subtract_frame_transforms
+from isaaclab.utils.math import quat_apply, subtract_frame_transforms
 
 from ...furniture.assembly import AssemblyTracker
 from ...furniture.square_table import pairs_for, pos_threshold_in, rel_pose_targets
@@ -61,11 +70,31 @@ def tracker(env: "ManagerBasedRLEnv") -> AssemblyTracker:
             pos_threshold_in(fcfg.mesh_frame, fcfg.assembled_pos_threshold),  # OBJ axes -> this frame's
             fcfg.ori_bound,
             env.device,
+            hold_steps=fcfg.success_hold_steps,
         )
         t._stamp = -1
         setattr(env, _ATTR, t)
     if t._stamp != env.common_step_counter:
         pos, quat = parts_pose_w(env)  # relative poses: any common frame will do
-        t.update(pos, quat)
+        clear = hand_clear(env, pos, t.pairs) if env.cfg.furniture.success_require_release else None
+        t.update(pos, quat, clear)
         t._stamp = env.common_step_counter
     return t
+
+
+def hand_clear(env: "ManagerBasedRLEnv", parts_pos_w: torch.Tensor, pairs: torch.Tensor) -> torch.Tensor:
+    """``(N, M)``: the fingers open wider than ``success_release_width`` and the TCP farther
+    than ``success_clearance`` from each pair's second part (the one that is inserted)."""
+    fcfg = env.cfg.furniture
+    robot = env.scene["robot"]
+    fingers = robot.find_joints("panda_finger_joint.*")[0]
+    released = robot.data.joint_pos[:, fingers].sum(dim=-1) > fcfg.success_release_width  # (N,)
+    hand = robot.find_bodies("panda_hand")[0][0]
+    off = torch.tensor(EE_OFFSET, device=env.device, dtype=parts_pos_w.dtype).expand(env.num_envs, -1)
+    tcp = robot.data.body_pos_w[:, hand] + quat_apply(robot.data.body_quat_w[:, hand], off)  # (N, 3)
+    dist = (parts_pos_w[:, pairs[:, 1]] - tcp.unsqueeze(1)).norm(dim=-1)  # (N, M)
+    return released.unsqueeze(-1) & (dist > fcfg.success_clearance)
+
+
+#: FurnitureBench's EE frame relative to ``panda_hand``
+EE_OFFSET = (0.0, 0.0, 0.1034)

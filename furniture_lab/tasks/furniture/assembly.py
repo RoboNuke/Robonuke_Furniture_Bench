@@ -14,6 +14,11 @@ the quaternion. Once a pair tests assembled it stays assembled for the rest of t
 (upstream's ``assembled_set``), and the reward is the number of pairs that became assembled
 this step (``compute_assemble``); :class:`AssemblyTracker` keeps that latch.
 
+The tracker can be made as strict as this port's demo collector (``hold_steps`` and the
+``hand_clear`` argument of :meth:`AssemblyTracker.update`): a pair then latches only after
+it has tested assembled for ``hold_steps`` consecutive steps with the hand released and
+clear of it. ``hold_steps=1`` without ``hand_clear`` is upstream's single-step latch.
+
 Quaternions are ``(w, x, y, z)``, Isaac Lab's convention. Pure torch: no env, no Isaac Lab.
 """
 
@@ -129,21 +134,38 @@ class AssemblyTracker:
         pos_threshold: Sequence[float],
         ori_bound: float,
         device: torch.device | str,
+        hold_steps: int = 1,
     ) -> None:
+        if hold_steps < 1:
+            raise ValueError(f"hold_steps must be >= 1, got {hold_steps}")
+        self.hold_steps = int(hold_steps)
         self.pairs = torch.as_tensor(list(pairs), dtype=torch.long, device=device)
         self.targets = torch.as_tensor(targets, dtype=torch.float32, device=device)
         self.pos_threshold = torch.as_tensor(pos_threshold, dtype=torch.float32, device=device)
         self.ori_bound = float(ori_bound)
         self.assembled = torch.zeros(num_envs, len(pairs), dtype=torch.bool, device=device)
         self.newly_assembled = torch.zeros_like(self.assembled)
+        #: the raw check this step, and how many consecutive steps each pair has qualified
+        self.now = torch.zeros_like(self.assembled)
+        self.streak = torch.zeros(num_envs, len(pairs), dtype=torch.long, device=device)
 
-    def update(self, parts_pos: torch.Tensor, parts_quat: torch.Tensor) -> torch.Tensor:
-        """Latch the pairs now assembled; returns the count newly assembled per env."""
-        now = pairs_assembled(
+    def update(
+        self, parts_pos: torch.Tensor, parts_quat: torch.Tensor, hand_clear: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        """Latch the pairs that qualified ``hold_steps`` steps in a row -- assembled now and,
+        when ``hand_clear`` (``(N,)`` or ``(N, M)`` bool) is given, the hand released and clear;
+        returns the count newly assembled per env."""
+        self.now = pairs_assembled(
             parts_pos, parts_quat, self.pairs, self.targets, self.pos_threshold, self.ori_bound
         )
-        self.newly_assembled = now & ~self.assembled
-        self.assembled |= now
+        qualifies = self.now
+        if hand_clear is not None:
+            clear = hand_clear if hand_clear.dim() == 2 else hand_clear.unsqueeze(-1)
+            qualifies = qualifies & clear
+        self.streak = torch.where(qualifies, self.streak + 1, torch.zeros_like(self.streak))
+        confirmed = self.streak >= self.hold_steps
+        self.newly_assembled = confirmed & ~self.assembled
+        self.assembled |= confirmed
         return self.newly_assembled.sum(dim=-1).float()
 
     def all_assembled(self) -> torch.Tensor:
@@ -153,6 +175,10 @@ class AssemblyTracker:
         if env_ids is None:
             self.assembled.zero_()
             self.newly_assembled.zero_()
+            self.now.zero_()
+            self.streak.zero_()
         else:
             self.assembled[env_ids] = False
             self.newly_assembled[env_ids] = False
+            self.now[env_ids] = False
+            self.streak[env_ids] = 0
