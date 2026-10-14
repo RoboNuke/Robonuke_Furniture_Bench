@@ -88,6 +88,30 @@ pip install -e .   # editable: the asset catalog resolves assets/ from this chec
 
 `task.cfg.*` overrides reach every field of the env cfg, as in any project on the package.
 
+### The end-effector wrench
+
+`env.wrench` (`furniture_lab/tasks/assembly/wrench.py`) estimates the external wrench on
+the EE from the joint torques, as the real robot does (`F = (J^T)^+ tau_ext`, base frame,
+at FurnitureBench's EE point): the drives' applied torques, optionally minus the Coriolis
+and `M q''` terms (the links carry no gravity here), projected through the EE Jacobian.
+It runs every physics substep, with Gaussian noise on the joint torques and/or the wrench
+and an EMA, like Forge's force sensor; it is zeroed on reset. `env.wrench.filtered` /
+`.raw` are `(N, 6)`, force then torque; the observation term `mdp.ee_wrench` is there to
+put in a group (none by default, so the task ids' observations are unchanged).
+
+| `furniture.` field | default | meaning |
+|---|---|---|
+| `wrench_smoothing` | 0.25 | EMA factor per physics substep (1 = unfiltered) |
+| `wrench_noise_joint_torque` | (0,) | std of the noise on each joint torque, N m: one value or seven |
+| `wrench_noise` | (0,) | std of the noise on the projected wrench: one value, (force, torque), or six |
+| `wrench_coriolis` | false | remove PhysX's Coriolis/centrifugal torques |
+| `wrench_inertial` | false | remove `M q''` (finite-differenced joint acceleration) |
+| `wrench_projection` | pinv | `pinv` (Moore-Penrose) or `dynamic` (`Lambda J M^-1`) |
+
+`scripts/wrench_probe.py` runs a press-and-twist script with the parts off the table and
+prints the estimate next to PhysX's joint reaction wrench on `panda_hand`, both as the
+external wrench on the EE in the base frame; `--csv` saves it.
+
 ## Replaying FurnitureBench demos
 
 `furniture_lab/demos.py` reads a FurnitureBench `.pkl` into this port's frames (robot-base

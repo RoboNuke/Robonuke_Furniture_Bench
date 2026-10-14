@@ -131,6 +131,19 @@ class FurnitureCfg:
     gripper_stiffness: float = 600.0  # N/m: ~9 N squeeze on a 30 mm leg
     gripper_damping: float = 40.0
     gripper_effort_limit: float = 30.0  # N per finger
+    #: the external EE wrench estimated from the joint torques every physics substep
+    #: (``assembly/wrench.py``; ``env.wrench.filtered``). EMA factor (Forge: 0.25);
+    #: Gaussian noise std on each joint torque before the projection (N m: one value or
+    #: seven) and on the projected wrench (one value, (force, torque), or six);
+    #: whether the Coriolis / inertial (M q'') terms are removed from the torques (the
+    #: robot carries no gravity in this env); the projection, Moore-Penrose (pinv) or
+    #: dynamically consistent (dynamic)
+    wrench_smoothing: float = 0.25
+    wrench_noise_joint_torque: Tuple[float, ...] = (0.0,)
+    wrench_noise: Tuple[float, ...] = (0.0,)
+    wrench_coriolis: bool = False
+    wrench_inertial: bool = False
+    wrench_projection: str = "pinv"
 
 
 @configclass

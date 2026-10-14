@@ -8,6 +8,12 @@ package's Forge wrapper that would is Forge-only, so the env publishes it itself
 The value has to be captured **before** the reset clears the assembly latch for the envs
 that finished, which is why it is taken in ``_reset_idx`` and attached to ``extras`` after
 the step.
+
+The env also owns the joint-torque wrench estimator (``wrench.py``, ``env.wrench``). It
+has to run every physics substep, and a manager-based env gives its terms no substep hook;
+the action manager's ``apply_action`` is called once per substep, just before the sim
+steps, so the env runs the estimator from there -- the moment Forge computes its force
+sensor too.
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ import torch
 from isaaclab.envs import ManagerBasedRLEnv
 
 from .mdp.state import tracker
+from .wrench import JointTorqueWrench
 
 
 class AssemblyEnv(ManagerBasedRLEnv):
@@ -31,6 +38,14 @@ class AssemblyEnv(ManagerBasedRLEnv):
         cfg.apply_gripper()
         super().__init__(cfg, render_mode, **kwargs)
         self._episode_success = torch.zeros(self.num_envs, device=self.device)
+        self.wrench = JointTorqueWrench(self, cfg.furniture)
+        apply_action = self.action_manager.apply_action
+
+        def apply_action_then_estimate():
+            apply_action()
+            self.wrench.update()
+
+        self.action_manager.apply_action = apply_action_then_estimate
 
     def _reset_idx(self, env_ids: Sequence[int]):
         if self._episode_success is not None and len(env_ids) > 0:
@@ -38,6 +53,7 @@ class AssemblyEnv(ManagerBasedRLEnv):
             self._episode_success[env_ids] = tracker(self).all_assembled()[env_ids].float()
             if self.cfg.furniture.log_resets:
                 self._log_reset(env_ids)
+            self.wrench.reset(env_ids)
         super()._reset_idx(env_ids)
 
     def _log_reset(self, env_ids: Sequence[int]) -> None:

@@ -106,3 +106,9 @@ def parts_poses_tag(env: "ManagerBasedRLEnv") -> torch.Tensor:
     quat_o = quat_mul(quat_t, q_mesh.expand(N * P, -1))
     out = torch.cat([pos_t, quat_o[:, [1, 2, 3, 0]]], dim=-1)
     return out.reshape(N, 7 * P)
+
+
+def ee_wrench(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """The external EE wrench estimated from the joint torques (``assembly/wrench.py``),
+    filtered, base frame: force then torque, (N, 6). Not in any group by default."""
+    return env.wrench.filtered
