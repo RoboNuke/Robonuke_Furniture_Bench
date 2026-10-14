@@ -33,7 +33,13 @@ import numpy as np
 from .tasks.furniture import frames
 from .tasks.furniture.square_table import MESH_FRAMES, PART_NAMES, mesh_frame
 
-__all__ = ["Demo", "load_demo", "quat_xyzw_to_wxyz", "quat_to_mat", "mat_to_quat"]
+__all__ = [
+    "Demo", "load_demo", "quat_xyzw_to_wxyz", "quat_to_mat", "mat_to_quat",
+    "mat_to_rot6d", "rot6d_to_mat", "FB_STATE_KEYS", "fb_state", "fb_abs_state", "fb_abs_action", "fb_abs_frames",
+]
+
+#: FurnitureBench's DEFAULT_STATE_OBS keys of ``robot_state``, in order (then ``parts_poses``)
+FB_STATE_KEYS = ("ee_pos", "ee_quat", "ee_pos_vel", "ee_ori_vel", "gripper_width")
 
 
 def quat_xyzw_to_wxyz(q: np.ndarray) -> np.ndarray:
@@ -158,3 +164,69 @@ def load_demo(path: str | Path, frame: Optional[str] = None) -> Demo:
         part_names=names,
         mesh_frame=frame,
     )
+
+
+# ------------------------------------------------------------ the -FBAbs-v0 interface, NumPy
+def mat_to_rot6d(R: np.ndarray) -> np.ndarray:
+    """The 6-d rotation (Zhou et al.): the matrix's first two rows, flattened. The NumPy twin
+    of ``furniture_lab/tasks/assembly/mdp/rot6d.py``."""
+    R = np.asarray(R, dtype=np.float64)
+    return R[:2, :].reshape(6)
+
+
+def rot6d_to_mat(d6: np.ndarray) -> np.ndarray:
+    d6 = np.asarray(d6, dtype=np.float64)
+    b1 = d6[0:3] / np.linalg.norm(d6[0:3])
+    b2 = d6[3:6] - np.dot(b1, d6[3:6]) * b1
+    b2 = b2 / np.linalg.norm(b2)
+    return np.stack((b1, b2, np.cross(b1, b2)))
+
+
+def _f32(value: Any) -> np.ndarray:
+    if hasattr(value, "detach"):
+        value = value.detach().cpu().numpy()
+    return np.asarray(value, dtype=np.float32).reshape(-1)
+
+
+def fb_state(obs: Dict[str, Any]) -> np.ndarray:
+    """One pkl observation -> FurnitureBench's 49-d state (the ``-FB-v0`` observation)."""
+    return np.concatenate([_f32(obs["robot_state"][k]) for k in FB_STATE_KEYS] + [_f32(obs["parts_poses"])])
+
+
+def fb_abs_state(obs: Dict[str, Any]) -> np.ndarray:
+    """One pkl observation -> the ``-FBAbs-v0`` observation (61): every orientation as rot6d.
+
+    ``[ee_pos 3, ee_rot6d 6, ee_pos_vel 3, ee_ori_vel 3, gripper_width 1, parts 5 x (pos 3, rot6d 6)]``
+    """
+    rs = obs["robot_state"]
+    ee_r6 = mat_to_rot6d(quat_to_mat(quat_xyzw_to_wxyz(_f32(rs["ee_quat"]))))
+    parts = _f32(obs["parts_poses"]).reshape(-1, 7)
+    parts_out = [np.concatenate([p[:3], mat_to_rot6d(quat_to_mat(quat_xyzw_to_wxyz(p[3:7])))]) for p in parts]
+    return np.concatenate(
+        [_f32(rs["ee_pos"]), ee_r6, _f32(rs["ee_pos_vel"]), _f32(rs["ee_ori_vel"]), _f32(rs["gripper_width"])] + parts_out
+    ).astype(np.float32)
+
+
+def fb_abs_action(obs: Dict[str, Any], action: Any) -> np.ndarray:
+    """The pkl's delta action at a frame -> the absolute target it commanded (10):
+    ``[goal_pos 3 (base frame), goal_rot6d 6, gripper]`` with ``goal_pos = ee_pos + dpos`` and
+    ``goal_R = R(ee_quat) @ R(dq)`` (the recorded rotation delta is in the EE's own frame);
+    the gripper command as recorded (FurnitureBench: > 0 closes)."""
+    a = _f32(action)
+    rs = obs["robot_state"]
+    goal_pos = _f32(rs["ee_pos"]) + a[0:3]
+    R_ee = quat_to_mat(quat_xyzw_to_wxyz(_f32(rs["ee_quat"])))
+    R_goal = R_ee @ quat_to_mat(quat_xyzw_to_wxyz(a[3:7]))
+    return np.concatenate([goal_pos, mat_to_rot6d(R_goal), a[7:8]]).astype(np.float32)
+
+
+def fb_abs_frames(data: Dict[str, Any]) -> tuple:
+    """A loaded pkl -> ``(states (T+1, 61), actions (T, 10))`` of the ``-FBAbs-v0`` interface
+    (the last observation is repeated when the pkl holds none after the last action)."""
+    obs, acts = data["observations"], data["actions"]
+    T = len(acts)
+    states = np.stack([fb_abs_state(o) for o in obs[: T + 1]])
+    if states.shape[0] == T:
+        states = np.concatenate([states, states[-1:]])
+    actions = np.stack([fb_abs_action(obs[t], acts[t]) for t in range(T)])
+    return states, actions

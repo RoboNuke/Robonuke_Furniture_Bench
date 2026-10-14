@@ -385,6 +385,62 @@ class OneLegFBEnvCfg(OneLegEnvCfg):
     actions: FBActionsCfg = FBActionsCfg()
 
 
+# ------------------------------------------- the absolute-pose, rot6d variant (ResiP's)
+#: ``-FBAbs-v0``: every orientation as rot6d (``mdp/rot6d.py``); the observation is 61 wide
+FBABS_OBS_LAYOUT = (("ee_pos", 3), ("ee_rot6d", 6), ("ee_pos_vel", 3), ("ee_ori_vel", 3), ("gripper_width", 1), ("parts_poses", 45))
+FBABS_OBS_DIM = sum(w for _, w in FBABS_OBS_LAYOUT)
+#: ``[goal_pos 3 (base frame), goal_rot6d 6, gripper]``
+FBABS_ACTION_DIM = 10
+
+
+def abs_arm_cfg() -> OperationalSpaceControllerActionCfg:
+    """The task's OSC term in ``pose_abs`` mode: the action is the target ``[pos, quat wxyz]``
+    in the base frame, unit scales (as ``replay_env_cfg.OneLegReplayAbsCfg``)."""
+    arm = ActionsCfg().arm
+    arm.controller_cfg.target_types = ["pose_abs"]
+    arm.position_scale = 1.0
+    arm.orientation_scale = 1.0
+    return arm
+
+
+@configclass
+class FBAbsObservationsCfg:
+    """``FBObservationsCfg`` with the EE and every part's orientation as rot6d."""
+
+    @configclass
+    class PolicyCfg(ObsGroup):
+        ee_pos = ObsTerm(func=mdp.ee_pos, params={"asset_cfg": EE_BODY, "offset": EE_OFFSET})
+        ee_rot6d = ObsTerm(func=mdp.ee_rot6d, params={"asset_cfg": EE_BODY, "offset": EE_OFFSET})
+        ee_vel = ObsTerm(func=mdp.ee_vel, params={"asset_cfg": EE_BODY})  # pos_vel then ori_vel
+        gripper_width = ObsTerm(
+            func=mdp.gripper_width,
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names="panda_finger_joint.*")},
+        )
+        parts_poses = ObsTerm(func=mdp.parts_poses_tag_rot6d)
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    policy: PolicyCfg = PolicyCfg()
+
+
+@configclass
+class FBAbsActionsCfg:
+    """The 10-d absolute target ``[goal_pos, goal_rot6d, gripper]`` (``mdp.FurnitureBenchAbsAction``)."""
+
+    fb = mdp.FurnitureBenchAbsActionCfg(asset_name="robot", arm=abs_arm_cfg(), gripper=ActionsCfg().gripper)
+
+
+@configclass
+class OneLegFBAbsEnvCfg(OneLegEnvCfg):
+    """``one_leg`` with absolute EE targets and rot6d orientations everywhere (observation 61,
+    action 10): ResiP's interface, for policies trained on the demos' ``*_abs`` columns."""
+
+    observations: FBAbsObservationsCfg = FBAbsObservationsCfg()
+    actions: FBAbsActionsCfg = FBAbsActionsCfg()
+
+
 @configclass
 class SquareTableEnvCfg(AssemblyEnvCfg):
     furniture: FurnitureCfg = FurnitureCfg(task="square_table")

@@ -25,6 +25,7 @@ upstream and what is this port's choice.
 | --- | --- | --- | --- |
 | `Isaac-Furniture-OneLeg-v0` | this port's 56-d (base frame, wxyz, + last action) | 7-d: OSC `pose_rel` (scaled) + binary gripper | RL |
 | `Isaac-Furniture-OneLeg-FB-v0` | **FurnitureBench's own** 49-d `DEFAULT_STATE_OBS` (`ee_pos, ee_quat xyzw, ee_pos_vel, ee_ori_vel, gripper_width, parts_poses` in the AprilTag frame) | **FurnitureBench's own** 8-d `[dpos, dquat xyzw (EE frame), gripper]`, driving the same OSC + gripper (`mdp.FurnitureBenchAction`) | policies trained on the demo pkls (BC, residual) |
+| `Isaac-Furniture-OneLeg-FBAbs-v0` | the FB observation with **every orientation as rot6d** (61-d: `ee_pos, ee_rot6d, ee_pos_vel, ee_ori_vel, gripper_width, parts 5 x [pos, rot6d]`) | 10-d **absolute** target `[goal_pos (base frame), goal_rot6d, gripper]` on the OSC in `pose_abs` mode (`mdp.FurnitureBenchAbsAction`) -- ResiP's `control_mode: pos` | diffusion policies (absolute targets regress better than deltas); the importer derives both columns from the pkls (`furniture_lab.demos.fb_abs_frames`) |
 | `Isaac-Furniture-SquareTable-v0` | as the first | as the first | all four legs |
 
 ## Setup
@@ -114,7 +115,8 @@ external wrench on the EE in the base frame; `--csv` saves it.
 
 ### Checking the FB interface against a demo
 
-`scripts/parity_check.py --demo <pkl> --headless` puts `Isaac-Furniture-OneLeg-FB-v0` into a
+`scripts/parity_check.py --demo <pkl> --headless` (`--task Isaac-Furniture-OneLeg-FBAbs-v0` for the
+absolute interface) puts the task's env into a
 demo's recorded state and compares the env's 49-d observation with the pkl's term by term
 (flagging quaternions that match only up to sign), then sends the pkl's 8-d actions
 through the FB action term one step at a time (re-synced before each) and reports the EE

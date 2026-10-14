@@ -99,3 +99,74 @@ def test_part_quaternions_are_canonical_like_the_collectors(actions_module):
     q = torch.tensor([[-0.5, 0.5, 0.5, 0.5], [0.5, -0.5, 0.5, -0.5], [0.0, 1.0, 0.0, 0.0]])
     out = canonical_quat(q)
     assert out.tolist() == [[0.5, -0.5, -0.5, -0.5], [0.5, -0.5, 0.5, -0.5], [0.0, 1.0, 0.0, 0.0]]
+
+
+def test_rot6d_torch_and_numpy_agree_and_roundtrip(actions_module):
+    import numpy as np
+
+    from furniture_lab import demos
+    from furniture_lab.tasks.assembly.mdp import rot6d
+
+    g = torch.Generator().manual_seed(1)
+    q = torch.randn(64, 4, generator=g)
+    q = q / q.norm(dim=-1, keepdim=True)
+    d6 = rot6d.quat_to_rot6d(q)
+    for i in range(64):
+        R_np = demos.quat_to_mat(q[i].numpy().astype(np.float64))
+        assert np.allclose(demos.mat_to_rot6d(R_np), d6[i].numpy(), atol=1e-5)
+        assert np.allclose(demos.rot6d_to_mat(d6[i].numpy()), R_np, atol=1e-5)
+    back = rot6d.rot6d_to_quat(d6)
+    assert torch.allclose(torch.minimum((back - q).abs().amax(-1), (back + q).abs().amax(-1)), torch.zeros(64), atol=1e-5)
+    assert (back[:, 0] >= 0).all()
+
+
+def test_the_abs_term_sends_the_target_pose_and_the_flipped_gripper(actions_module, monkeypatch):
+    from furniture_lab.tasks.assembly.mdp import rot6d
+
+    term = actions_module.FurnitureBenchAbsAction.__new__(actions_module.FurnitureBenchAbsAction)
+    term.arm, term.gripper = Recorder(), Recorder()
+    term.num_envs, term.device = 1, "cpu"
+    term._raw = torch.zeros(1, 10)
+    term._processed = torch.zeros(1, 8)
+    s = math.sqrt(0.5)
+    q = torch.tensor([[s, 0.0, 0.0, s]])  # 90 deg about z
+    a = torch.cat([torch.tensor([[0.5, 0.1, 0.2]]), rot6d.quat_to_rot6d(q), torch.tensor([[1.0]])], dim=-1)
+    term.process_actions(a)
+    assert term.arm.received.shape == (1, 7) and term.gripper.received.shape == (1, 1)
+    assert torch.allclose(term.arm.received[0, 0:3], torch.tensor([0.5, 0.1, 0.2]))
+    assert torch.allclose(term.arm.received[0, 3:7], q[0], atol=1e-6)  # wxyz
+    assert term.gripper.received[0, 0] == -1.0
+    assert term.action_dim == 10
+
+
+def test_fb_abs_action_is_the_pose_the_delta_commanded():
+    import numpy as np
+
+    from furniture_lab import demos
+
+    ee_pos = np.array([0.5, 0.0, 0.3], dtype=np.float32)
+    ee_q_wxyz = np.array([0.0, 1.0, 0.0, 0.0])  # hand pointing down
+    half = 0.05
+    dq_wxyz = np.array([math.cos(half), 0.0, 0.0, math.sin(half)])  # 0.1 rad about the EE's z
+    obs = {"robot_state": {"ee_pos": ee_pos, "ee_quat": ee_q_wxyz[[1, 2, 3, 0]]}}
+    act = np.array([0.01, 0.0, -0.02, *dq_wxyz[[1, 2, 3, 0]], 1.0], dtype=np.float32)
+    out = demos.fb_abs_action(obs, act)
+    assert out.shape == (10,)
+    assert np.allclose(out[0:3], [0.51, 0.0, 0.28])
+    R_goal = demos.quat_to_mat(ee_q_wxyz) @ demos.quat_to_mat(dq_wxyz)
+    assert np.allclose(demos.rot6d_to_mat(out[3:9]), R_goal, atol=1e-6)
+    assert out[9] == 1.0
+
+
+def test_fb_abs_state_layout(actions_module):
+    import numpy as np
+
+    from furniture_lab import demos
+
+    rs = {"ee_pos": np.zeros(3), "ee_quat": [0, 0, 0, 1.0], "ee_pos_vel": np.ones(3), "ee_ori_vel": 2 * np.ones(3), "gripper_width": [0.04]}
+    parts = np.concatenate([[i, 0, 0, 0, 0, 0, 1.0] for i in range(5)])
+    s = demos.fb_abs_state({"robot_state": rs, "parts_poses": parts})
+    assert s.shape == (61,)
+    assert np.allclose(s[3:9], [1, 0, 0, 0, 1, 0])  # identity rotation's rot6d
+    assert s[15] == 0.04 and s[16] == 0 and s[16 + 9] == 1  # parts: pos x of part 0 and 1
+    assert np.allclose(s[19:25], [1, 0, 0, 0, 1, 0])

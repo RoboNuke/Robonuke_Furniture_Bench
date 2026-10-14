@@ -2,10 +2,12 @@
 
     python scripts/parity_check.py --demo ~/Robonuke_Furniture_Bench/demos/one_leg/<stamp>/<stamp>.pkl --headless
     python scripts/parity_check.py --demo DEMO.pkl --steps 100 --no_resync --headless   # open loop
+    python scripts/parity_check.py --demo DEMO.pkl --task Isaac-Furniture-OneLeg-FBAbs-v0 --headless
 
-A BC policy trains on the pkl's 49 observation numbers and 8 action numbers; at rollout it
-gets the env's. This script puts ``Isaac-Furniture-OneLeg-FB-v0`` into the demo's recorded
-state and measures both sides of that contract:
+A BC policy trains on the pkl's 49 observation numbers and 8 action numbers (``-FB-v0``), or
+the 61 / 10 of the absolute rot6d interface (``-FBAbs-v0``, ``furniture_lab.demos.fb_abs_frames``,
+the same conversion the importer uses); at rollout it gets the env's. This script puts the
+task's env into the demo's recorded state and measures both sides of that contract:
 
 1. **Observation parity**: with the env in the demo's state at step t, the env's 49-d
    policy observation against the pkl's, term by term (``ee_pos, ee_quat, ee_pos_vel,
@@ -51,11 +53,15 @@ from isaaclab.utils.math import quat_error_magnitude  # noqa: E402
 from isaaclab_tasks.utils import load_cfg_from_registry  # noqa: E402
 
 import furniture_lab.tasks  # noqa: E402, F401
-from furniture_lab.demos import load_demo  # noqa: E402
-from furniture_lab.tasks.assembly.assembly_env_cfg import FB_OBS_LAYOUT  # noqa: E402
+from furniture_lab.demos import fb_abs_frames, fb_state, load_demo  # noqa: E402
+from furniture_lab.tasks.assembly.assembly_env_cfg import FB_OBS_LAYOUT, FBABS_OBS_LAYOUT  # noqa: E402
+from furniture_lab.tasks.assembly.mdp.rot6d import rot6d_to_quat  # noqa: E402
 from furniture_lab.tasks.assembly.mdp.state import tracker  # noqa: E402
 
-STATE_KEYS = ("ee_pos", "ee_quat", "ee_pos_vel", "ee_ori_vel", "gripper_width")
+ABS = "FBAbs" in args.task
+LAYOUT = FBABS_OBS_LAYOUT if ABS else FB_OBS_LAYOUT
+ROT = "ee_rot6d" if ABS else "ee_quat"
+PART_WIDTH = 9 if ABS else 7
 
 
 def _np(v):
@@ -65,12 +71,13 @@ def _np(v):
 
 
 def raw_frames(path):
-    """The pkl's 49-d state vectors (T+1, 49) and 8-d actions (T, 8), as the importer builds them."""
+    """The pkl's state vectors (T+1, D) and actions (T, A) of the task's interface, as the
+    importer builds them."""
     with open(path, "rb") as f:
         d = pickle.load(f)
-    states = np.stack([
-        np.concatenate([_np(o["robot_state"][k]) for k in STATE_KEYS] + [_np(o["parts_poses"])]) for o in d["observations"]
-    ])
+    if ABS:
+        return fb_abs_frames(d)
+    states = np.stack([fb_state(o) for o in d["observations"]])
     acts = np.stack([_np(a) for a in d["actions"]])
     return states, acts
 
@@ -105,7 +112,7 @@ def env_obs(env) -> np.ndarray:
 
 def term_slices():
     out, start = {}, 0
-    for name, width in FB_OBS_LAYOUT:
+    for name, width in LAYOUT:
         out[name] = slice(start, start + width)
         start += width
     return out
@@ -125,11 +132,12 @@ def obs_parity(env, demo, states, t: int, part_names) -> list:
     lines = [f"[obs] demo step {t}: max |env - pkl| per term"]
     for name in ("ee_pos", "ee_pos_vel", "ee_ori_vel", "gripper_width"):
         lines.append(f"[obs]   {name:14s} {np.abs(ours[sl[name]] - theirs[sl[name]]).max():.2e}")
-    lines.append(f"[obs]   {'ee_quat':14s} {quat_report(ours[sl['ee_quat']], theirs[sl['ee_quat']])}")
-    po, pt = ours[sl["parts_poses"]].reshape(-1, 7), theirs[sl["parts_poses"]].reshape(-1, 7)
+    rot = (lambda a, b: f"{np.abs(a - b).max():.2e}") if ABS else quat_report
+    lines.append(f"[obs]   {ROT:14s} {rot(ours[sl[ROT]], theirs[sl[ROT]])}")
+    po, pt = ours[sl["parts_poses"]].reshape(-1, PART_WIDTH), theirs[sl["parts_poses"]].reshape(-1, PART_WIDTH)
     for i, name in enumerate(part_names):
         lines.append(
-            f"[obs]   {name:22s} pos {np.abs(po[i, :3] - pt[i, :3]).max():.2e}  quat {quat_report(po[i, 3:], pt[i, 3:])}"
+            f"[obs]   {name:22s} pos {np.abs(po[i, :3] - pt[i, :3]).max():.2e}  rot {rot(po[i, 3:], pt[i, 3:])}"
         )
     return lines
 
@@ -170,8 +178,12 @@ def main() -> None:
         env.step(action)
         ours, theirs = env_obs(env), states[t + 1]
         p = float(np.linalg.norm(ours[sl["ee_pos"]] - theirs[sl["ee_pos"]]))
-        qa = torch.tensor(ours[sl["ee_quat"]][[3, 0, 1, 2]]).reshape(1, 4)  # xyzw -> wxyz
-        qb = torch.tensor(theirs[sl["ee_quat"]][[3, 0, 1, 2]]).reshape(1, 4)
+        if ABS:
+            qa = rot6d_to_quat(torch.tensor(ours[sl[ROT]]).reshape(1, 6))
+            qb = rot6d_to_quat(torch.tensor(theirs[sl[ROT]]).reshape(1, 6))
+        else:
+            qa = torch.tensor(ours[sl[ROT]][[3, 0, 1, 2]]).reshape(1, 4)  # xyzw -> wxyz
+            qb = torch.tensor(theirs[sl[ROT]][[3, 0, 1, 2]]).reshape(1, 4)
         r = float(quat_error_magnitude(qa, qb))
         g = float(abs(ours[sl["gripper_width"]] - theirs[sl["gripper_width"]])[0])
         pos_err.append(p)
@@ -192,7 +204,7 @@ def main() -> None:
         flush=True,
     )
     print(
-        "[parity] read it as: observation poses ~1e-5 and no SIGN FLIP -> the policy sees the training numbers; "
+        "[parity] read it as: observation poses ~1e-5 (and, with quaternions, no SIGN FLIP) -> the policy sees the training numbers; "
         "one-step EE errors under ~1 mm / 1 deg -> its actions do what the demos' did; "
         "open-loop drift growing over tens of steps is physics, not the interface.",
         flush=True,

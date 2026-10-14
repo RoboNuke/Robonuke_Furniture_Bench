@@ -88,10 +88,9 @@ def ee_quat_xyzw(
     return q[:, [1, 2, 3, 0]]
 
 
-def parts_poses_tag(env: "ManagerBasedRLEnv") -> torch.Tensor:
-    """FurnitureBench's ``parts_poses``: ``(N, 7 P)`` of ``[pos 3, quat xyzw 4]`` per part, the
-    OBJ mesh frames in the AprilTag frame -- what upstream's policies observe and what the
-    demo pkls hold (the collector's ``read_state``, batched)."""
+def _parts_pose_tag(env: "ManagerBasedRLEnv"):
+    """Every part's OBJ-frame pose in the AprilTag frame: ``(N, P, 3)`` and ``(N, P, 4)`` wxyz
+    with ``w >= 0`` (the collector's ``read_state``, batched)."""
     from ...furniture import frames
     from ...furniture.square_table import MESH_FRAMES
 
@@ -104,8 +103,36 @@ def parts_poses_tag(env: "ManagerBasedRLEnv") -> torch.Tensor:
     # USD frame -> OBJ frame: R_obj = R_usd @ R_mesh (square_table.reset_pose_world's inverse)
     q_mesh = torch.tensor(frames.mat_to_quat_wxyz(MESH_FRAMES[env.cfg.furniture.mesh_frame]), device=device, dtype=dtype)
     quat_o = canonical_quat(quat_mul(quat_t, q_mesh.expand(N * P, -1)))
-    out = torch.cat([pos_t, quat_o[:, [1, 2, 3, 0]]], dim=-1)
-    return out.reshape(N, 7 * P)
+    return pos_t.reshape(N, P, 3), quat_o.reshape(N, P, 4)
+
+
+def parts_poses_tag(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """FurnitureBench's ``parts_poses``: ``(N, 7 P)`` of ``[pos 3, quat xyzw 4]`` per part, the
+    OBJ mesh frames in the AprilTag frame -- what upstream's policies observe and what the
+    demo pkls hold."""
+    pos_t, quat_o = _parts_pose_tag(env)
+    N, P = pos_t.shape[:2]
+    return torch.cat([pos_t, quat_o[..., [1, 2, 3, 0]]], dim=-1).reshape(N, 7 * P)
+
+
+def parts_poses_tag_rot6d(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """``parts_poses`` with each orientation as rot6d: ``(N, 9 P)`` of ``[pos 3, rot6d 6]``."""
+    from .rot6d import quat_to_rot6d
+
+    pos_t, quat_o = _parts_pose_tag(env)
+    N, P = pos_t.shape[:2]
+    return torch.cat([pos_t, quat_to_rot6d(quat_o)], dim=-1).reshape(N, 9 * P)
+
+
+def ee_rot6d(
+    env: "ManagerBasedRLEnv",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="panda_hand"),
+    offset: tuple = (0.0, 0.0, 0.1034),
+) -> torch.Tensor:
+    """The EE orientation (robot-base frame) as rot6d, (N, 6)."""
+    from .rot6d import quat_to_rot6d
+
+    return quat_to_rot6d(_ee_pose_b(env, asset_cfg, offset)[1])
 
 
 def canonical_quat(q_wxyz: torch.Tensor) -> torch.Tensor:

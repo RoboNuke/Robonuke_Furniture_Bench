@@ -1,4 +1,4 @@
-"""FurnitureBench's 8-d action as a manager-based action term.
+"""FurnitureBench's 8-d action as a manager-based action term, and the absolute-pose variant.
 
 Upstream's action is ``[dpos 3 (m, robot frame), dquat 4 (xyzw, the rotation delta in the
 EE's own frame), gripper (< 0 opens, else closes)]``. This term takes exactly that and drives
@@ -7,6 +7,11 @@ the delta rotation re-expressed in the base frame as an axis-angle ``/ orientati
 the term multiplies the scales back) and the binary gripper (sign flipped: Isaac Lab's
 closes on ``< 0``). It is the collector's ``env_action`` as a term, so a policy trained on
 the demos' actions sends them to the env as they are.
+
+:class:`FurnitureBenchAbsAction` is the ``-FBAbs-v0`` interface: ``[goal_pos 3 (base frame),
+goal_rot6d 6, gripper]`` -- the absolute EE target the demo's delta commanded
+(``furniture_lab.demos.fb_abs_action``), as ResiP's ``control_mode: pos`` -- driving the OSC in
+``pose_abs`` mode (target ``[pos, quat wxyz]``, scales 1) and the same gripper term.
 """
 
 from __future__ import annotations
@@ -91,3 +96,33 @@ class FurnitureBenchActionCfg(ActionTermCfg):
     asset_name: str = "robot"
     arm: object = MISSING
     gripper: object = MISSING
+
+
+class FurnitureBenchAbsAction(FurnitureBenchAction):
+    """See the module docstring: 10-d absolute target, rot6d orientation."""
+
+    def __init__(self, cfg: "FurnitureBenchAbsActionCfg", env: "ManagerBasedEnv") -> None:
+        super().__init__(cfg, env)
+        self._raw = torch.zeros(self.num_envs, 10, device=self.device)
+        self._processed = torch.zeros(self.num_envs, 8, device=self.device)  # arm 7 (pos, quat), gripper 1
+
+    @property
+    def action_dim(self) -> int:
+        return 10
+
+    def process_actions(self, actions: torch.Tensor) -> None:
+        from .rot6d import rot6d_to_quat
+
+        self._raw[:] = actions
+        quat = rot6d_to_quat(actions[:, 3:9])  # wxyz, the OSC's pose_abs convention
+        grip = -actions[:, 9:10]  # upstream: < 0 opens; Isaac Lab's binary term: < 0 closes
+        self._processed[:] = torch.cat([actions[:, 0:3], quat, grip], dim=-1)
+        self.arm.process_actions(self._processed[:, 0:7])
+        self.gripper.process_actions(self._processed[:, 7:8])
+
+
+@configclass
+class FurnitureBenchAbsActionCfg(FurnitureBenchActionCfg):
+    """``arm`` must be the OSC term in ``pose_abs`` mode with unit scales."""
+
+    class_type: type = FurnitureBenchAbsAction

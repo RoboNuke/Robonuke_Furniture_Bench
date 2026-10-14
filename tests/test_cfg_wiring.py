@@ -192,3 +192,20 @@ def test_furniturebench_interface_cfg(cfg_module):
     # the task env's success termination and the rest are inherited unchanged
     assert cfg.terminations.success.func.__name__ == "all_assembled"
     assert cfg.furniture.task == "one_leg"
+
+
+def test_furniturebench_abs_interface_cfg(cfg_module):
+    """Isaac-Furniture-OneLeg-FBAbs-v0: rot6d everywhere (61), the 10-d absolute action on a
+    pose_abs OSC term with unit scales."""
+    cfg = cfg_module.OneLegFBAbsEnvCfg()
+    terms = [n for n, v in vars(cfg.observations.policy).items() if hasattr(v, "func")]
+    assert terms == ["ee_pos", "ee_rot6d", "ee_vel", "gripper_width", "parts_poses"]
+    assert cfg.observations.policy.parts_poses.func.__name__ == "parts_poses_tag_rot6d"
+    assert cfg_module.FBABS_OBS_DIM == 61 and cfg_module.FBABS_ACTION_DIM == 10
+    fb = cfg.actions.fb
+    assert fb.class_type.__name__ == "FurnitureBenchAbsAction"
+    assert fb.arm.controller_cfg.target_types == ["pose_abs"]
+    assert fb.arm.position_scale == 1.0 and fb.arm.orientation_scale == 1.0
+    # the shared task cfg is untouched
+    own = cfg_module.ActionsCfg().arm
+    assert own.controller_cfg.target_types == ["pose_rel"] and own.position_scale == 0.025
