@@ -38,10 +38,11 @@ from dataclasses import MISSING
 from typing import List, Tuple
 
 import isaaclab.sim as sim_utils
-from isaaclab.controllers import OperationalSpaceControllerCfg
+from isaaclab.controllers import DifferentialIKControllerCfg, OperationalSpaceControllerCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.envs.mdp.actions.actions_cfg import (
     BinaryJointPositionActionCfg,
+    DifferentialInverseKinematicsActionCfg,
     OperationalSpaceControllerActionCfg,
 )
 from isaaclab.managers import EventTermCfg as EventTerm
@@ -141,6 +142,10 @@ class FurnitureCfg:
     gripper_stiffness: float = 600.0  # N/m: ~9 N squeeze on a 30 mm leg
     gripper_damping: float = 40.0
     gripper_effort_limit: float = 30.0  # N per finger
+    #: the FB action terms' gripper hysteresis: the command flips only when the action's sign
+    #: changes and its size exceeds this (ResiP / FurnitureRLSimEnv's grasp_margin, 0.019);
+    #: 0 = flip on the sign, Isaac Lab's binary term as is
+    gripper_margin: float = 0.0
     #: the external EE wrench estimated from the joint torques every physics substep
     #: (``assembly/wrench.py``; ``env.wrench.filtered``). EMA factor (Forge: 0.25);
     #: Gaussian noise std on each joint torque before the projection (N m: one value or
@@ -449,6 +454,80 @@ class OneLegFBAbsEnvCfg(OneLegEnvCfg):
 
     observations: FBAbsObservationsCfg = FBAbsObservationsCfg()
     actions: FBAbsActionsCfg = FBAbsActionsCfg()
+
+
+# --------------------------------------------- ResiP's sim (FurnitureRLSimEnv), for the demos
+#: what ResiP's BC and RL ran in (``furniture_bench/envs/furniture_rl_sim_env.py`` of their
+#: fork): 10 Hz policy (dt 1/60 x 6 there; 1/120 x 12 here, the same 0.1 s with this port's
+#: physics step), the arm on differential IK into stiff joint PD (1000 / 200), the gripper a
+#: constant ~13 N squeeze, friction 0.15 parts / 0.10 table (FurnitureSim's), and the gripper
+#: hysteresis. Episodes 70 s (their 700-step rollout cap at 10 Hz).
+RESIP_DECIMATION = 12
+RESIP_ARM_STIFFNESS = 1000.0
+RESIP_ARM_DAMPING = 200.0
+
+
+def dik_arm_cfg(absolute: bool) -> DifferentialInverseKinematicsActionCfg:
+    """ResiP's arm controller as an Isaac Lab term: differential IK (least squares,
+    ``pinv``) of FurnitureBench's EE frame to joint position targets. Relative: the 6-d
+    ``[dpos, axis-angle]`` in the base frame, scaled like the OSC term (an action of 1 is
+    2.5 cm / 0.1 rad); absolute: the 7-d target ``[pos, quat wxyz]`` in the base frame."""
+    return DifferentialInverseKinematicsActionCfg(
+        asset_name="robot",
+        joint_names=["panda_joint.*"],
+        body_name="panda_hand",
+        body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=EE_OFFSET),
+        controller=DifferentialIKControllerCfg(command_type="pose", use_relative_mode=not absolute, ik_method="pinv"),
+        scale=1.0 if absolute else (0.025, 0.025, 0.025, 0.1, 0.1, 0.1),
+    )
+
+
+def apply_resip(cfg) -> None:
+    """Turn a one_leg cfg into ResiP's sim (see above), in place; call from ``__post_init__``."""
+    cfg.decimation = RESIP_DECIMATION
+    cfg.sim.dt = 1.0 / 120.0
+    cfg.sim.render_interval = RESIP_DECIMATION
+    cfg.episode_length_s = 70.0
+    for group in ("panda_shoulder", "panda_forearm"):
+        cfg.scene.robot.actuators[group].stiffness = RESIP_ARM_STIFFNESS
+        cfg.scene.robot.actuators[group].damping = RESIP_ARM_DAMPING
+    f = cfg.furniture
+    f.part_friction, f.table_friction = 0.15, 0.10
+    # a stiff drive saturating at 13 N: the constant 13 N squeeze once the fingers touch
+    f.gripper_stiffness, f.gripper_damping, f.gripper_effort_limit = 2000.0, 40.0, 13.0
+    f.gripper_margin = 0.019
+    cfg.apply_friction()
+    cfg.apply_gripper()
+    fb = getattr(cfg.actions, "fb", None)
+    if fb is not None:
+        fb.arm = dik_arm_cfg(absolute=fb.class_type.__name__ == "FurnitureBenchAbsAction")
+    else:
+        cfg.actions.arm = dik_arm_cfg(absolute=False)
+
+
+@configclass
+class OneLegResiPEnvCfg(OneLegEnvCfg):
+    """``one_leg`` (this port's 7-d action / 56-d observation) in ResiP's sim."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        apply_resip(self)
+
+
+@configclass
+class OneLegFBResiPEnvCfg(OneLegFBEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        apply_resip(self)
+
+
+@configclass
+class OneLegFBAbsResiPEnvCfg(OneLegFBAbsEnvCfg):
+    """ResiP's interface (absolute rot6d targets, rot6d observation) in ResiP's sim."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        apply_resip(self)
 
 
 @configclass

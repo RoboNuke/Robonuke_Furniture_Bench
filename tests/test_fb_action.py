@@ -66,6 +66,7 @@ def make_term(actions_module, monkeypatch, ee_quat_wxyz):
     term.num_envs, term.device = 1, "cpu"
     term._raw = torch.zeros(1, 8)
     term._processed = torch.zeros(1, 7)
+    term._grip = actions_module._GripperHysteresis(1, "cpu", 0.0)
     return term
 
 
@@ -128,6 +129,7 @@ def test_the_abs_term_sends_the_target_pose_and_the_flipped_gripper(actions_modu
     term.num_envs, term.device = 1, "cpu"
     term._raw = torch.zeros(1, 10)
     term._processed = torch.zeros(1, 8)
+    term._grip = actions_module._GripperHysteresis(1, "cpu", 0.0)
     s = math.sqrt(0.5)
     q = torch.tensor([[s, 0.0, 0.0, s]])  # 90 deg about z
     a = torch.cat([torch.tensor([[0.5, 0.1, 0.2]]), rot6d.quat_to_rot6d(q), torch.tensor([[1.0]])], dim=-1)
@@ -170,3 +172,22 @@ def test_fb_abs_state_layout(actions_module):
     assert np.allclose(s[3:9], [1, 0, 0, 0, 1, 0])  # identity rotation's rot6d
     assert s[15] == 0.04 and s[16] == 0 and s[16 + 9] == 1  # parts: pos x of part 0 and 1
     assert np.allclose(s[19:25], [1, 0, 0, 0, 1, 0])
+
+
+
+def test_gripper_hysteresis_flips_only_on_a_clear_sign_change(actions_module):
+    h = actions_module._GripperHysteresis(2, "cpu", 0.019)
+    seq = [[-1.0, -1.0], [0.01, 0.5], [0.3, -0.005], [-0.01, -0.5]]
+    out = [h(torch.tensor([[a], [b]])).flatten().tolist() for a, b in seq]
+    assert out == [[-1.0, -1.0], [-1.0, 1.0], [1.0, 1.0], [1.0, -1.0]]
+    h.reset(torch.tensor([0]))
+    assert h.state.flatten().tolist() == [-1.0, -1.0]
+    assert actions_module._GripperHysteresis(1, "cpu", 0.0)(torch.tensor([[0.004]])).item() == pytest.approx(0.004)  # off: pass-through
+
+
+def test_arm_scales_reads_osc_and_dik_terms(actions_module):
+    from types import SimpleNamespace
+
+    assert actions_module.arm_scales(SimpleNamespace(position_scale=0.025, orientation_scale=0.1)) == (0.025, 0.1)
+    assert actions_module.arm_scales(SimpleNamespace(scale=(0.025, 0.025, 0.025, 0.1, 0.1, 0.1))) == (0.025, 0.1)
+    assert actions_module.arm_scales(SimpleNamespace(scale=1.0)) == (1.0, 1.0)

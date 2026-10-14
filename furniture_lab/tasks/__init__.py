@@ -30,6 +30,14 @@ gym.register(
     kwargs={"env_cfg_entry_point": f"{__name__}.assembly.assembly_env_cfg:OneLegFBAbsEnvCfg"},
 )
 
+for _suffix, _cfg in (("ResiP", "OneLegResiPEnvCfg"), ("FB-ResiP", "OneLegFBResiPEnvCfg"), ("FBAbs-ResiP", "OneLegFBAbsResiPEnvCfg")):
+    gym.register(
+        id=f"Isaac-Furniture-OneLeg-{_suffix}-v0",
+        entry_point=f"{__name__}.assembly.assembly_env:AssemblyEnv",
+        disable_env_checker=True,
+        kwargs={"env_cfg_entry_point": f"{__name__}.assembly.assembly_env_cfg:{_cfg}"},
+    )
+
 gym.register(
     id="Isaac-Furniture-SquareTable-v0",
     entry_point=f"{__name__}.assembly.assembly_env:AssemblyEnv",

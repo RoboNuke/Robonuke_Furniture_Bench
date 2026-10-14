@@ -129,6 +129,22 @@ demo's recorded state and compares the env's 49-d observation with the pkl's ter
 through the FB action term one step at a time (re-synced before each) and reports the EE
 error against the demo's next step. Run it before training a policy on the demos.
 
+### ResiP's sim
+
+`Isaac-Furniture-OneLeg-ResiP-v0`, `-FB-ResiP-v0` and `-FBAbs-ResiP-v0` are the three interfaces in
+ResiP's FurnitureRLSimEnv (`assembly_env_cfg.apply_resip`): a 10 Hz policy (1/120 s physics x 12),
+the arm on differential IK (least squares) into joint PD 1000 / 200 instead of the OSC, friction
+0.15 parts / 0.10 table, a stiff finger drive capped at 13 N (their constant 13 N squeeze), the
+FB action terms' gripper hysteresis (`furniture.gripper_margin` 0.019: the command flips only on a
+clear sign change), and 70 s episodes (their 700-step cap). Demos for them:
+
+```bash
+python scripts/collect_scripted.py --sim resip --out_dir ~/Robonuke_Furniture_Bench/demos_resip --num_demos 50
+```
+
+`--servo_gain` defaults to 1 there (the joint PD closes a command in a step; the OSC's 20 % per
+step is why the port's default is 5).
+
 ## Replaying FurnitureBench demos
 
 `furniture_lab/demos.py` reads a FurnitureBench `.pkl` into this port's frames (robot-base

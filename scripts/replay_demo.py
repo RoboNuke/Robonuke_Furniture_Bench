@@ -162,11 +162,14 @@ def make_action(env, demo, t: int, mode: str) -> torch.Tensor:
         return torch.cat([target_pos, target_quat, grip], dim=-1)
     # actions: the recorded delta, re-expressed for the pose_rel action
     arm_cfg = env.cfg.actions.arm
-    dpos = to_t(demo.act_dpos[t], env) / arm_cfg.position_scale
+    from furniture_lab.tasks.assembly.mdp.actions import arm_scales
+
+    pos_scale, rot_scale = arm_scales(arm_cfg)
+    dpos = to_t(demo.act_dpos[t], env) / pos_scale
     q_d = to_t(demo.act_dquat[t], env)  # rotation delta in the EE frame
     _, q_ee = ee_pose_b(env)
     q_base = quat_mul(quat_mul(q_ee, q_d), quat_conjugate(q_ee))  # the same rotation, base frame
-    drot = axis_angle_from_quat(q_base) / arm_cfg.orientation_scale
+    drot = axis_angle_from_quat(q_base) / rot_scale
     return torch.cat([dpos, drot, grip], dim=-1)
 
 

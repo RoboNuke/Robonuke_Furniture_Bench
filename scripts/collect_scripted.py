@@ -50,10 +50,20 @@ parser.add_argument("--screw_press", type=float, default=0.005, help="m pressed 
 parser.add_argument("--timeout", type=int, default=600, help="upstream's scripted_timeout for one_leg")
 parser.add_argument("--save_failure", action="store_true", help="keep failed attempts (pkl + video) under fails/")
 parser.add_argument("--record", action="store_true", help="film every attempt (headless ok)")
-parser.add_argument("--fps", type=int, default=20)
+parser.add_argument("--fps", type=int, default=None, help="--record playback rate (default: the control rate, real time)")
 parser.add_argument("--cam", type=str, default="0.95,0.45,0.35")
 parser.add_argument("--look", type=str, default="0.54,0.0,0.03")
 parser.add_argument("--print_every", type=int, default=25)
+parser.add_argument(
+    "--sim", choices=["port", "resip"], default="port",
+    help="port: this port's 20 Hz OSC sim; resip: ResiP's FurnitureRLSimEnv -- 10 Hz, differential IK into joint PD "
+    "1000/200, friction 0.15/0.10, a 13 N gripper (assembly_env_cfg.apply_resip); the friction/grip flags still override",
+)
+parser.add_argument(
+    "--servo_gain", type=float, default=None,
+    help="servo: command = gain x the wanted per-step motion (default 5 for the port's OSC, which closes ~20%% of a "
+    "command per step; 1 for resip, whose joint PD closes about all of it)",
+)
 parser.add_argument("--part_friction", type=float, default=None, help="parts' friction (FurnitureSim: 0.15)")
 parser.add_argument("--grip_stiffness", type=float, default=None, help="finger drive N/m (default 600; Isaac Lab's Franka 2000)")
 parser.add_argument("--grip_force", type=float, default=None, help="finger effort limit N (default 30; Isaac Lab's Franka 200)")
@@ -85,7 +95,8 @@ from furniture_lab.tasks.assembly.assembly_env_cfg import EE_OFFSET  # noqa: E40
 from furniture_lab.tasks.assembly.mdp.state import parts_pose_w, tracker  # noqa: E402
 from furniture_lab.tasks.assembly.mdp.terminations import part_out_of_limits  # noqa: E402
 from furniture_lab.tasks.furniture.assembly import pairs_assembled  # noqa: E402
-from furniture_lab.tasks.assembly.replay_env_cfg import OneLegReplayRelCfg  # noqa: E402
+from furniture_lab.tasks.assembly.mdp.actions import arm_scales  # noqa: E402
+from furniture_lab.tasks.assembly.replay_env_cfg import OneLegReplayRelCfg, OneLegReplayRelResiPCfg  # noqa: E402
 from furniture_lab.tasks.furniture import frames  # noqa: E402
 from furniture_lab.tasks.furniture.square_table import MESH_FRAMES  # noqa: E402
 
@@ -101,7 +112,8 @@ class Recorder:
         look = torch.tensor([[float(v) for v in args.look.split(",")]], device=env.device)
         origins = env.scene.env_origins[:1]
         self.camera.set_world_poses_from_view(eye + origins, look + origins, env_ids=[0])
-        self.writer = VideoWriter(path, fps=args.fps)
+        self.fps = args.fps or max(1, round(1.0 / env.step_dt))
+        self.writer = VideoWriter(path, fps=self.fps)
         self.caption = ""
         self.frames = 0
 
@@ -126,7 +138,7 @@ class Recorder:
 
     def close(self) -> None:
         self.writer.close()
-        print(f"[collect] wrote {self.writer.path}: {self.frames} frames at {args.fps} fps", flush=True)
+        print(f"[collect] wrote {self.writer.path}: {self.frames} frames at {self.fps} fps", flush=True)
 
 
 class AbortKeys:
@@ -241,17 +253,18 @@ def read_state(env, part_names, mesh_frame: str):
 def env_action(env, a: sp.ScriptedAction, ee_quat_b: torch.Tensor) -> torch.Tensor:
     """Upstream's delta -> this env's pose_rel action (+ gripper, sign flipped)."""
     arm_cfg = env.cfg.actions.arm
-    dpos = torch.tensor(a.delta_pos, device=env.device, dtype=torch.float32).reshape(1, 3) / arm_cfg.position_scale
+    pos_scale, rot_scale = arm_scales(arm_cfg)
+    dpos = torch.tensor(a.delta_pos, device=env.device, dtype=torch.float32).reshape(1, 3) / pos_scale
     q_d = torch.tensor(a.delta_quat, device=env.device, dtype=torch.float32).reshape(1, 4)
     q_base = quat_mul(quat_mul(ee_quat_b, q_d), quat_conjugate(ee_quat_b))
-    drot = axis_angle_from_quat(q_base) / arm_cfg.orientation_scale
+    drot = axis_angle_from_quat(q_base) / rot_scale
     grip = torch.tensor([[-a.gripper]], device=env.device)  # upstream +1 closes; here < 0 closes
     return torch.cat([dpos, drot, grip], dim=-1)
 
 
 # ------------------------------------------------------------------------------ main
 def main() -> None:
-    cfg = OneLegReplayRelCfg()
+    cfg = OneLegReplayRelResiPCfg() if args.sim == "resip" else OneLegReplayRelCfg()
     cfg.scene.num_envs = 1
     cfg.furniture.log_resets = True
     if args.part_friction is not None:
@@ -308,6 +321,7 @@ def main() -> None:
                 press=args.screw_press,
                 insert_rate=args.insert_rate,
                 wind_step_deg=args.wind_speed * env.step_dt,
+                gain=args.servo_gain if args.servo_gain is not None else (1.0 if args.sim == "resip" else 5.0),
             )
         else:
             policy = sp.OneLegScriptedPolicy(seed=args.seed + attempt - 1, noise=not args.no_noise)

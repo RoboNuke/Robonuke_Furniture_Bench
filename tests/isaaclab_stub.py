@@ -119,7 +119,11 @@ def install():
     module("isaaclab_assets.robots")
     module("isaaclab_assets.robots.franka", FRANKA_PANDA_CFG=franka)
     # ---- controllers, managers, scene, utils
-    module("isaaclab.controllers", OperationalSpaceControllerCfg=_kwargs_class("OperationalSpaceControllerCfg"))
+    module(
+        "isaaclab.controllers",
+        OperationalSpaceControllerCfg=_kwargs_class("OperationalSpaceControllerCfg"),
+        DifferentialIKControllerCfg=_kwargs_class("DifferentialIKControllerCfg"),
+    )
     module(
         "isaaclab.managers",
         **{
@@ -145,11 +149,14 @@ def install():
     for n in stock:
         getattr(mdp, n).__name__ = n
     osc_action = _kwargs_class("OperationalSpaceControllerActionCfg")
+    dik_action = _kwargs_class("DifferentialInverseKinematicsActionCfg")
+    dik_action.OffsetCfg = _kwargs_class("OffsetCfg")
     osc_action.OffsetCfg = _kwargs_class("OffsetCfg")
     module(
         "isaaclab.envs.mdp.actions.actions_cfg",
         BinaryJointPositionActionCfg=_kwargs_class("BinaryJointPositionActionCfg"),
         OperationalSpaceControllerActionCfg=osc_action,
+        DifferentialInverseKinematicsActionCfg=dik_action,
     )
     module("isaaclab.envs.mdp.actions")
 

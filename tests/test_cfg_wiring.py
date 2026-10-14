@@ -220,3 +220,22 @@ def test_the_table_is_dark_grey(cfg_module):
 def test_success_mode_defaults_to_soft(cfg_module):
     cfg = cfg_module.OneLegFBAbsEnvCfg()
     assert cfg.furniture.success_mode == "soft" and cfg.furniture.success_hold_steps == 10
+
+
+
+def test_resip_sim_cfgs(cfg_module):
+    """ResiP's FurnitureRLSimEnv: 10 Hz, differential IK into joint PD 1000/200, FurnitureSim
+    friction, a 13 N gripper with hysteresis, 70 s episodes -- on every interface."""
+    for name, absolute in (("OneLegResiPEnvCfg", False), ("OneLegFBResiPEnvCfg", False), ("OneLegFBAbsResiPEnvCfg", True)):
+        cfg = getattr(cfg_module, name)()
+        assert cfg.decimation == 12 and abs(cfg.sim.dt - 1 / 120) < 1e-12 and cfg.episode_length_s == 70.0
+        assert cfg.scene.robot.actuators["panda_shoulder"].stiffness == 1000.0
+        assert cfg.scene.robot.actuators["panda_forearm"].damping == 200.0
+        f = cfg.furniture
+        assert (f.part_friction, f.table_friction, f.gripper_effort_limit, f.gripper_margin) == (0.15, 0.10, 13.0, 0.019)
+        arm = cfg.actions.fb.arm if hasattr(cfg.actions, "fb") else cfg.actions.arm
+        assert arm.controller.use_relative_mode is (not absolute) and arm.controller.ik_method == "pinv"
+        assert arm.body_offset.pos == cfg_module.EE_OFFSET
+    # the port's cfgs are untouched
+    port = cfg_module.OneLegFBAbsEnvCfg()
+    assert port.decimation == 6 and port.scene.robot.actuators["panda_shoulder"].stiffness == 0.0

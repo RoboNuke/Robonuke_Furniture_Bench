@@ -20,7 +20,7 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils import configclass
 
 from . import mdp
-from .assembly_env_cfg import OneLegEnvCfg
+from .assembly_env_cfg import OneLegEnvCfg, apply_resip
 
 
 @configclass
@@ -41,3 +41,14 @@ class OneLegReplayAbsCfg(OneLegReplayRelCfg):
         self.actions.arm.controller_cfg.target_types = ["pose_abs"]
         self.actions.arm.position_scale = 1.0
         self.actions.arm.orientation_scale = 1.0
+
+
+@configclass
+class OneLegReplayRelResiPCfg(OneLegReplayRelCfg):
+    """The collector's env in ResiP's sim (10 Hz, differential IK + joint PD, ResiP's
+    friction and gripper; ``assembly_env_cfg.apply_resip``), still no success termination."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        apply_resip(self)
+        self.episode_length_s = 120.0

@@ -175,6 +175,7 @@ class ServoOneLegPolicy:
         q7_margin: float = 0.08,
         wind_step_deg: float = 9.0,
         assembled_hold_steps: int = 5,
+        gain: float = 5.0,
     ) -> None:
         self.rng = np.random.default_rng(seed)
         self.noise = noise
@@ -182,9 +183,15 @@ class ServoOneLegPolicy:
         self.leg = SquareTableLegPart("square_table_leg4", OneLegScriptedPolicy.LEG4_ASSEMBLED_POS, self.rng, noise)
         self.leg.q7_margin = q7_margin
         self.leg.hover_dz = hover_dz
-        self.leg.wind_step_deg = 5.0 * wind_step_deg  # a command, closed ~20 % per step (see ObjectServo)
-        # pos_step / rot_step_deg are the wanted motion per step; the command is kp x that
-        self.servo = ObjectServo(max_cmd_pos=5.0 * pos_step, max_cmd_rot_deg=5.0 * rot_step_deg)
+        # ``gain``: how much bigger a command is than the motion wanted from it -- 5 for the
+        # port's OSC, which closes ~20 % of a command per step (see ObjectServo); 1 for a
+        # controller that closes it all (ResiP's differential IK into stiff joint PD)
+        self.gain = float(gain)
+        self.leg.wind_step_deg = self.gain * wind_step_deg  # a command
+        # pos_step / rot_step_deg are the wanted motion per step; the command is gain x that
+        self.servo = ObjectServo(
+            kp_pos=self.gain, kp_rot=self.gain, max_cmd_pos=self.gain * pos_step, max_cmd_rot_deg=self.gain * rot_step_deg
+        )
         self.lead = np.radians(lead_deg)
         self.press = press
         self.insert_rate = insert_rate
