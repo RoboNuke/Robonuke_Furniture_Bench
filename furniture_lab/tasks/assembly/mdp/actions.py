@@ -41,7 +41,8 @@ class FurnitureBenchAction(ActionTerm):
         self._ee_cfg.resolve(env.scene)
         self._offset = tuple(cfg.arm.body_offset.pos) if cfg.arm.body_offset is not None else (0.0, 0.0, 0.0)
         self._raw = torch.zeros(self.num_envs, 8, device=self.device)
-        self._processed = torch.zeros(self.num_envs, 8, device=self.device)
+        # what the two terms receive: the arm's 6 (dpos, axis-angle) and the gripper's 1
+        self._processed = torch.zeros(self.num_envs, 7, device=self.device)
 
     @property
     def action_dim(self) -> int:
