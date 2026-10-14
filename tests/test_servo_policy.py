@@ -129,7 +129,8 @@ def test_servo_policy_assembles_in_the_ideal_world():
     assert abs(sv.yaw_of(top[:3, :3]) - sv.yaw_of(goal_R)) < np.radians(3)
     # the phases, in order, with at least one regrasp (one wrist range is < a full turn)
     want = ["top_free", "top_servo", "top_release", "top_up", "leg_free", "leg_lift", "leg_upright", "leg_over",
-            "leg_lower", "leg_settle", "leg_release", "regrasp_free", "screw", "screw_release", "regrasp_free", "screw"]
+            "leg_lower", "leg_settle", "leg_release", "release_up", "regrasp_free", "screw", "screw_release", "screw_release_up",
+            "regrasp_free", "screw"]
     assert phases[: len(want)] == want, phases
     assert phases[-2:] == ["neutral", "done"]
     # the leg went in upright and ended seated

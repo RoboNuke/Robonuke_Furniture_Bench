@@ -173,6 +173,7 @@ class ServoOneLegPolicy:
         insert_floor: float = 0.003,
         insert_stop: float = 0.0005,
         insert_lift: float = 0.0,
+        release_dz: float = 0.05,
         corner_clearance: float = -0.002,
         hover_dz: float = 0.04,
         q7_margin: float = 0.08,
@@ -203,6 +204,10 @@ class ServoOneLegPolicy:
         self.insert_floor = insert_floor
         self.insert_stop = insert_stop
         self.insert_lift = insert_lift
+        #: after letting go of the leg, the hand rises this far straight up -- same x, y and
+        #: orientation, at most pos_step per step -- before the regrasp moves it anywhere else
+        self.release_dz = release_dz
+        self.pos_step = pos_step
         self.corner_clearance = corner_clearance
         self.assembled_hold_steps = assembled_hold_steps
         # phase machine
@@ -377,6 +382,10 @@ class ServoOneLegPolicy:
         elif self.phase == "leg_release":
             goal_pos, goal_R = self.hold_pose[:3, 3].copy(), self.hold_pose[:3, :3].copy()
             if s.gripper_width >= MAX_GRIPPER_WIDTH - 0.001:
+                self._goto("release_up")
+        elif self.phase == "release_up":
+            goal_pos, goal_R, rose = self._straight_up(ee_pos)
+            if rose:
                 self._start_regrasp()
 
         # ---------------------------------------------------------------- the leg: screw
@@ -407,6 +416,10 @@ class ServoOneLegPolicy:
         elif self.phase == "screw_release":
             goal_pos, goal_R = self.hold_pose[:3, 3].copy(), self.hold_pose[:3, :3].copy()
             if s.gripper_width >= MAX_GRIPPER_WIDTH - 0.001:
+                self._goto("screw_release_up")
+        elif self.phase == "screw_release_up":
+            goal_pos, goal_R, rose = self._straight_up(ee_pos)
+            if rose:
                 self._start_regrasp()
 
         # ---------------------------------------------------------------- the end
@@ -435,6 +448,14 @@ class ServoOneLegPolicy:
         return ScriptedAction(
             delta_pos, delta_quat, grip, goal_pos, goal_R, skill_complete, self.state, assembled_flag, self.done
         )
+
+    def _straight_up(self, ee_pos: np.ndarray):
+        """The hold pose's x, y and orientation, z ramped up by at most pos_step a step to
+        release_dz above it; and whether the hand has got there (within 3 mm)."""
+        goal_pos, goal_R = self.hold_pose[:3, 3].copy(), self.hold_pose[:3, :3].copy()
+        top = goal_pos[2] + self.release_dz
+        goal_pos[2] = min(top, max(ee_pos[2], goal_pos[2]) + self.pos_step)
+        return goal_pos, goal_R, ee_pos[2] >= top - 0.003
 
     def _start_regrasp(self) -> None:
         """Upstream-style free-hand regrasp states of SquareTableLegPart: hover over the leg
