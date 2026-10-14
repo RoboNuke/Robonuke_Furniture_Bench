@@ -103,9 +103,15 @@ def parts_poses_tag(env: "ManagerBasedRLEnv") -> torch.Tensor:
     pos_t, quat_t = subtract_frame_transforms(tag_pos, tag_quat, pos_b.reshape(-1, 3), quat_b.reshape(-1, 4))
     # USD frame -> OBJ frame: R_obj = R_usd @ R_mesh (square_table.reset_pose_world's inverse)
     q_mesh = torch.tensor(frames.mat_to_quat_wxyz(MESH_FRAMES[env.cfg.furniture.mesh_frame]), device=device, dtype=dtype)
-    quat_o = quat_mul(quat_t, q_mesh.expand(N * P, -1))
+    quat_o = canonical_quat(quat_mul(quat_t, q_mesh.expand(N * P, -1)))
     out = torch.cat([pos_t, quat_o[:, [1, 2, 3, 0]]], dim=-1)
     return out.reshape(N, 7 * P)
+
+
+def canonical_quat(q_wxyz: torch.Tensor) -> torch.Tensor:
+    """``q`` with ``w >= 0``: the sign the collector's ``mat_to_quat_wxyz`` gives the demos'
+    part quaternions. ``q`` and ``-q`` are one rotation but two input vectors to a policy."""
+    return torch.where(q_wxyz[..., :1] < 0, -q_wxyz, q_wxyz)
 
 
 def ee_wrench(env: "ManagerBasedRLEnv") -> torch.Tensor:

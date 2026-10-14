@@ -91,3 +91,11 @@ def test_the_rotation_delta_is_reexpressed_in_the_base_frame(actions_module, mon
     term.process_actions(a)
     assert torch.allclose(term.arm.received[0, 3:6], torch.tensor([0.0, 1.0, 0.0]), atol=1e-6)
     assert term.gripper.received[0, 0] == 1.0
+
+
+def test_part_quaternions_are_canonical_like_the_collectors(actions_module):
+    from furniture_lab.tasks.assembly.mdp.observations import canonical_quat
+
+    q = torch.tensor([[-0.5, 0.5, 0.5, 0.5], [0.5, -0.5, 0.5, -0.5], [0.0, 1.0, 0.0, 0.0]])
+    out = canonical_quat(q)
+    assert out.tolist() == [[0.5, -0.5, -0.5, -0.5], [0.5, -0.5, 0.5, -0.5], [0.0, 1.0, 0.0, 0.0]]
