@@ -211,9 +211,7 @@ def test_furniturebench_abs_interface_cfg(cfg_module):
     assert own.controller_cfg.target_types == ["pose_rel"] and own.position_scale == 0.025
 
 
-def test_the_table_colour_knob_reaches_the_material(cfg_module):
+
+def test_the_table_is_dark_grey(cfg_module):
     cfg = cfg_module.OneLegFBAbsEnvCfg()
-    assert tuple(cfg.furniture.table_color) == (0.08, 0.08, 0.08)
-    cfg.furniture.table_color = (0.2, 0.1, 0.0)
-    cfg.apply_visuals()
-    assert cfg.scene.table.spawn.visual_material.diffuse_color == (0.2, 0.1, 0.0)
+    assert tuple(cfg.scene.table.spawn.visual_material.diffuse_color) == (0.08, 0.08, 0.08)

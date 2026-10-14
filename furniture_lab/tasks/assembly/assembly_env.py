@@ -39,7 +39,6 @@ class AssemblyEnv(ManagerBasedRLEnv):
         # the actuator here, where the scene has not been built yet
         cfg.apply_friction()
         cfg.apply_gripper()
-        cfg.apply_visuals()
         super().__init__(cfg, render_mode, **kwargs)
         self._episode_success = torch.zeros(self.num_envs, device=self.device)
         self.wrench = JointTorqueWrench(self, cfg.furniture)
