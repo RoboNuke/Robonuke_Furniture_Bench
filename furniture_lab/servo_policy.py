@@ -174,6 +174,7 @@ class ServoOneLegPolicy:
         insert_stop: float = 0.0005,
         insert_lift: float = 0.0,
         release_dz: float = 0.05,
+        upright_step_deg: float | None = None,
         corner_clearance: float = -0.002,
         hover_dz: float = 0.04,
         q7_margin: float = 0.08,
@@ -195,6 +196,11 @@ class ServoOneLegPolicy:
         # pos_step / rot_step_deg are the wanted motion per step; the command is gain x that
         self.servo = ObjectServo(
             kp_pos=self.gain, kp_rot=self.gain, max_cmd_pos=self.gain * pos_step, max_cmd_rot_deg=self.gain * rot_step_deg
+        )
+        #: standing the grasped leg up in the air: its own rotation cap (default rot_step_deg)
+        up = rot_step_deg if upright_step_deg is None else upright_step_deg
+        self.upright_servo = ObjectServo(
+            kp_pos=self.gain, kp_rot=self.gain, max_cmd_pos=self.gain * pos_step, max_cmd_rot_deg=self.gain * up
         )
         self.lead = np.radians(lead_deg)
         self.press = press
@@ -351,7 +357,7 @@ class ServoOneLegPolicy:
         elif self.phase == "leg_upright":
             # stand it up in the air: axis vertical, bolt down, by the smallest rotation
             tgt = np.array([leg_pos[0], leg_pos[1], seat[2] + 0.10])
-            goal_pos, goal_R, ep, er = self.servo.step(leg_pos, leg_R, tgt, upright_goal(leg_R), ee_pos, ee_R)
+            goal_pos, goal_R, ep, er = self.upright_servo.step(leg_pos, leg_R, tgt, upright_goal(leg_R), ee_pos, ee_R)
             if ep < 0.01 and leg_tilt_deg(leg_R) < 3.0:
                 self._goto("leg_over")
         elif self.phase == "leg_over":
