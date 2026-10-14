@@ -7,13 +7,13 @@ and every term reaches it through :func:`tracker`, which also updates it **once 
 step**, whichever term asks first (the termination manager runs before the reward manager
 in ``ManagerBasedRLEnv.step``).
 
-Success is as strict as the demo collector's verdict (``scripts/collect_scripted.py``): a
+With ``furniture.success_mode: strict``, success is as strict as the demo collector's verdict (``scripts/collect_scripted.py``): a
 pair latches only after it has tested assembled for ``furniture.success_hold_steps``
 consecutive steps with the hand released (finger width above
 ``furniture.success_release_width``) and clear (the TCP farther than
 ``furniture.success_clearance`` from the pair's second part) -- i.e. it stays put once the
 robot has let go, instead of counting a single frame it passes through or is held in.
-``furniture.success_mode: soft`` is FurnitureBench's single-step latch instead.
+The default, ``soft``, is FurnitureBench's single-step latch, what papers report.
 """
 
 from __future__ import annotations

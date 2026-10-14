@@ -217,6 +217,6 @@ def test_the_table_is_dark_grey(cfg_module):
     assert tuple(cfg.scene.table.spawn.visual_material.diffuse_color) == (0.08, 0.08, 0.08)
 
 
-def test_success_mode_defaults_to_strict(cfg_module):
+def test_success_mode_defaults_to_soft(cfg_module):
     cfg = cfg_module.OneLegFBAbsEnvCfg()
-    assert cfg.furniture.success_mode == "strict" and cfg.furniture.success_hold_steps == 10
+    assert cfg.furniture.success_mode == "soft" and cfg.furniture.success_hold_steps == 10

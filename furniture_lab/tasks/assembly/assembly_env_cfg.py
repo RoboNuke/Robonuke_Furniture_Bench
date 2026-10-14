@@ -114,12 +114,13 @@ class FurnitureCfg:
     #: carries them into ``mesh_frame`` (uwlab: z is the seat axis)
     assembled_pos_threshold: Tuple[float, float, float] = ASSEMBLED_POS_THRESHOLD
     ori_bound: float = ORI_BOUND
-    #: ``strict``: success as the demo collector's verdict (``mdp/state.py``) -- a pair counts
+    #: ``soft`` (default, what papers report): FurnitureBench's latch, the first single step
+    #: the check passes, hand anywhere (the other three fields unused). ``strict``: success
+    #: as the demo collector's verdict (``mdp/state.py``) -- a pair counts
     #: once it has tested assembled ``success_hold_steps`` consecutive steps with the fingers
     #: open wider than ``success_release_width`` (m) and the TCP farther than
-    #: ``success_clearance`` (m) from the inserted part. ``soft``: FurnitureBench's latch, the
-    #: first single step the check passes, hand anywhere (the other three fields unused).
-    success_mode: str = "strict"
+    #: ``success_clearance`` (m) from the inserted part.
+    success_mode: str = "soft"
     success_hold_steps: int = 10
     success_release_width: float = 0.05
     success_clearance: float = 0.08

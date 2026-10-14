@@ -84,12 +84,13 @@ pip install -e .   # editable: the asset catalog resolves assets/ from this chec
 * **Reward**: upstream's sparse +1 per newly assembled pair, once per episode. No shaping.
 * **Done**: success (every pair assembled), `episode_length_s` (30 s by default), or a part
   fallen off the table (added here).
-* **Success** (`furniture.success_mode: strict`, the default) is as strict as the demo collector's verdict: the leg must test assembled
+* **Success** (`furniture.success_mode`): `soft`, the default, is upstream's single-step latch
+  (the first step the check passes, hand anywhere) -- what papers report. `strict` is the demo
+  collector's verdict: the leg must test assembled
   (FurnitureBench's tolerances) for `furniture.success_hold_steps` (10) consecutive steps
   with the fingers open (`success_release_width`, 5 cm) and the TCP more than
   `success_clearance` (8 cm) from the leg -- it stays seated after the robot lets go. The
-  sparse reward pays at that moment. `success_mode: soft` is upstream's single-step latch
-  (the first step the check passes, hand anywhere).
+  sparse reward pays at that moment.
 * **Reset**: upstream's `low` randomization (+-1.5 cm, +-15 deg, collision-free);
   `configs/experiments/one_leg_medium.yaml` sets `medium`.
 
