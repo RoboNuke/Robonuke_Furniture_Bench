@@ -47,6 +47,7 @@ parser.add_argument("--wind_speed", type=float, default=180.0, help="deg/s of wr
 parser.add_argument("--insert_lift", type=float, default=0.0, help="m to raise the hold pose above where the leg stopped before opening (0.003 = 3 mm, no press)")
 parser.add_argument("--upright_speed", type=float, default=None, help="servo: deg/s cap on standing the grasped leg up in the air (default: --rot_speed)")
 parser.add_argument("--screw_upright", action="store_true", help="servo: while screwing, also servo the leg upright and onto the hole axis (default: only turn and press)")
+parser.add_argument("--insert_yaw", type=float, default=15.0, help="servo: deg counter-clockwise (seen from above) the leg is turned from its stood-up yaw before it is carried over the hole and lowered (0 = as grasped)")
 parser.add_argument("--release_dz", type=float, default=0.05, help="servo: m the open hand rises straight up after letting go of the leg, before the regrasp")
 parser.add_argument("--insert_floor", type=float, default=0.003, help="servo: m above the seat the leg is never lowered below")
 parser.add_argument("--insert_stop", type=float, default=0.0005, help="servo: the leg counts as stopped when it dropped less than this (m) over 3 steps")
@@ -339,6 +340,7 @@ def main() -> None:
                 insert_lift=args.insert_lift,
                 release_dz=args.release_dz,
                 screw_upright=args.screw_upright,
+                insert_yaw_deg=args.insert_yaw,
                 upright_step_deg=None if args.upright_speed is None else args.upright_speed * env.step_dt,
                 wind_step_deg=args.wind_speed * env.step_dt,
                 gain=args.servo_gain if args.servo_gain is not None else (1.0 if args.sim == "resip" else 5.0),

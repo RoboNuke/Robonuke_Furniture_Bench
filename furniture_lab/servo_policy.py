@@ -176,6 +176,7 @@ class ServoOneLegPolicy:
         release_dz: float = 0.05,
         upright_step_deg: float | None = None,
         screw_upright: bool = False,
+        insert_yaw_deg: float = 15.0,
         corner_clearance: float = -0.002,
         hover_dz: float = 0.04,
         q7_margin: float = 0.08,
@@ -219,6 +220,11 @@ class ServoOneLegPolicy:
         #: screwing: False turns the hand about the vertical through the leg's axis and presses,
         #: nothing else; True also servos the leg upright and onto the hole axis (the old way)
         self.screw_upright = screw_upright
+        #: the leg is carried over the hole and lowered at its yaw when it stood up plus this
+        #: (deg, counter-clockwise seen from above = +world yaw), a fixed goal for the whole
+        #: placement: turns the thread start away from the yaw that cross-threads
+        self.insert_yaw = np.radians(insert_yaw_deg)
+        self._place_R = None
         self.corner_clearance = corner_clearance
         self.assembled_hold_steps = assembled_hold_steps
         # phase machine
@@ -364,19 +370,20 @@ class ServoOneLegPolicy:
             tgt = np.array([leg_pos[0], leg_pos[1], seat[2] + 0.10])
             goal_pos, goal_R, ep, er = self.upright_servo.step(leg_pos, leg_R, tgt, upright_goal(leg_R), ee_pos, ee_R)
             if ep < 0.01 and leg_tilt_deg(leg_R) < 3.0:
+                self._place_R = upright_goal(leg_R, self.insert_yaw)
                 self._goto("leg_over")
         elif self.phase == "leg_over":
             # bolt tip just above the hole: origin at seat + 30 mm (bolt is 25.4 mm long)
             tgt = np.array([seat[0], seat[1], seat[2] + 0.030])
-            goal_pos, goal_R, ep, er = self.servo.step(leg_pos, leg_R, tgt, upright_goal(leg_R), ee_pos, ee_R)
-            if ep < 0.002 and leg_tilt_deg(leg_R) < 2.0:
+            goal_pos, goal_R, ep, er = self.servo.step(leg_pos, leg_R, tgt, self._place_R, ee_pos, ee_R)
+            if ep < 0.002 and leg_tilt_deg(leg_R) < 2.0 and er < np.radians(3.0):  # at the placement yaw too
                 self._goto("leg_lower")
         elif self.phase == "leg_lower":
             # down at insert_rate until the leg's own height stops changing (the thread holds it)
             self._leg_z_hist.append(leg_pos[2])
             z_cmd = max(leg_pos[2] - self.insert_rate, seat[2] + self.insert_floor)
             tgt = np.array([seat[0], seat[1], z_cmd])
-            goal_pos, goal_R, ep, er = self.servo.step(leg_pos, leg_R, tgt, upright_goal(leg_R), ee_pos, ee_R)
+            goal_pos, goal_R, ep, er = self.servo.step(leg_pos, leg_R, tgt, self._place_R, ee_pos, ee_R)
             h = self._leg_z_hist
             stopped = len(h) > 3 and (h[-4] - h[-1]) < self.insert_stop  # the thread holds it
             if stopped or leg_pos[2] <= seat[2] + self.insert_floor + 0.0001:
