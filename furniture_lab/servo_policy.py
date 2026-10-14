@@ -256,6 +256,13 @@ class ServoOneLegPolicy:
         self._yaw_hist = []
         self._track = []
 
+    def _opened(self, s: ScriptedState) -> bool:
+        """The fingers are fully open, or have stopped opening (< 0.5 mm in 5 steps, e.g. a
+        finger against the top or a wall): either way, nothing more will come of waiting."""
+        if s.gripper_width >= MAX_GRIPPER_WIDTH - 0.001:
+            return True
+        return self.phase_steps > 3 and self._stalled(np.array([s.gripper_width]), 5, 0.0005)
+
     def _stalled(self, x: np.ndarray, steps: int, eps: float) -> bool:
         """``x`` (a vector of what should still be moving) has changed by less than ``eps``
         over the last ``steps`` steps -- contact, or converged."""
@@ -337,11 +344,13 @@ class ServoOneLegPolicy:
                 skill_complete = 1
         elif self.phase == "top_release":
             goal_pos, goal_R = self.hold_pose[:3, 3].copy(), self.hold_pose[:3, :3].copy()
-            if s.gripper_width >= MAX_GRIPPER_WIDTH - 0.001:
+            if self._opened(s):
                 self._goto("top_up")
         elif self.phase == "top_up":
+            # straight up to z 0.10, ramped (a one-step jump lets the joint PD take a
+            # joint-space path and swing the open fingers through the top)
             goal_pos = self.hold_pose[:3, 3].copy()
-            goal_pos[2] = 0.10
+            goal_pos[2] = min(0.10, max(ee_pos[2], goal_pos[2]) + self.pos_step)
             goal_R = self.hold_pose[:3, :3].copy()
             if abs(ee_pos[2] - 0.10) < 0.01:
                 self.leg.reset()
@@ -399,7 +408,7 @@ class ServoOneLegPolicy:
                 self._goto("leg_release")
         elif self.phase == "leg_release":
             goal_pos, goal_R = self.hold_pose[:3, 3].copy(), self.hold_pose[:3, :3].copy()
-            if s.gripper_width >= MAX_GRIPPER_WIDTH - 0.001:
+            if self._opened(s):
                 self._goto("release_up")
         elif self.phase == "release_up":
             goal_pos, goal_R, rose = self._straight_up(ee_pos)
@@ -445,7 +454,7 @@ class ServoOneLegPolicy:
                 self._goto("screw_release")
         elif self.phase == "screw_release":
             goal_pos, goal_R = self.hold_pose[:3, 3].copy(), self.hold_pose[:3, :3].copy()
-            if s.gripper_width >= MAX_GRIPPER_WIDTH - 0.001:
+            if self._opened(s):
                 self._goto("screw_release_up")
         elif self.phase == "screw_release_up":
             goal_pos, goal_R, rose = self._straight_up(ee_pos)

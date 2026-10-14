@@ -459,8 +459,8 @@ class OneLegFBAbsEnvCfg(OneLegEnvCfg):
 # --------------------------------------------- ResiP's sim (FurnitureRLSimEnv), for the demos
 #: what ResiP's BC and RL ran in (``furniture_bench/envs/furniture_rl_sim_env.py`` of their
 #: fork): 10 Hz policy (dt 1/60 x 6 there; 1/120 x 12 here, the same 0.1 s with this port's
-#: physics step), the arm on differential IK into stiff joint PD (1000 / 200), the gripper a
-#: constant ~13 N squeeze, friction 0.15 parts / 0.10 table (FurnitureSim's), and the gripper
+#: physics step), the arm on differential IK into stiff joint PD (1000 / 200), the finger
+#: drive 600 N/m capped at 13 N, friction 0.15 parts / 0.10 table (FurnitureSim's), and the gripper
 #: hysteresis. Episodes 70 s (their 700-step rollout cap at 10 Hz).
 RESIP_DECIMATION = 12
 RESIP_ARM_STIFFNESS = 1000.0
@@ -493,8 +493,9 @@ def apply_resip(cfg) -> None:
         cfg.scene.robot.actuators[group].damping = RESIP_ARM_DAMPING
     f = cfg.furniture
     f.part_friction, f.table_friction = 0.15, 0.10
-    # a stiff drive saturating at 13 N: the constant 13 N squeeze once the fingers touch
-    f.gripper_stiffness, f.gripper_damping, f.gripper_effort_limit = 2000.0, 40.0, 13.0
+    # finger drive capped at ResiP's 13 N; 600 N/m (as the port: a stiffer drive pushed the
+    # fingers into the leg), ~9 N squeeze on a 30 mm leg -- the setting the resip demos use
+    f.gripper_stiffness, f.gripper_damping, f.gripper_effort_limit = 600.0, 40.0, 13.0
     f.gripper_margin = 0.019
     cfg.apply_friction()
     cfg.apply_gripper()

@@ -134,7 +134,7 @@ error against the demo's next step. Run it before training a policy on the demos
 `Isaac-Furniture-OneLeg-ResiP-v0`, `-FB-ResiP-v0` and `-FBAbs-ResiP-v0` are the three interfaces in
 ResiP's FurnitureRLSimEnv (`assembly_env_cfg.apply_resip`): a 10 Hz policy (1/120 s physics x 12),
 the arm on differential IK (least squares) into joint PD 1000 / 200 instead of the OSC, friction
-0.15 parts / 0.10 table, a stiff finger drive capped at 13 N (their constant 13 N squeeze), the
+0.15 parts / 0.10 table, a 600 N/m finger drive capped at 13 N (ResiP's 13 N; a stiffer drive pushed the fingers into the leg), the
 FB action terms' gripper hysteresis (`furniture.gripper_margin` 0.019: the command flips only on a
 clear sign change), and 70 s episodes (their 700-step cap). Demos for them:
 
