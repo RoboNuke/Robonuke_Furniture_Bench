@@ -57,6 +57,11 @@ parser.add_argument("--cam", type=str, default="0.95,0.45,0.35")
 parser.add_argument("--look", type=str, default="0.54,0.0,0.03")
 parser.add_argument("--print_every", type=int, default=25)
 parser.add_argument(
+    "--render_every", type=int, default=None,
+    help="viewer: render every N physics steps (1/120 s each; default one render per control step: 6 port, 12 resip). "
+    "2 = 60 fps. Display only: physics and demos are unchanged",
+)
+parser.add_argument(
     "--sim", choices=["port", "resip"], default="port",
     help="port: this port's 20 Hz OSC sim; resip: ResiP's FurnitureRLSimEnv -- 10 Hz, differential IK into joint PD "
     "1000/200, friction 0.15/0.10, a 13 N gripper (assembly_env_cfg.apply_resip); the friction/grip flags still override",
@@ -268,6 +273,10 @@ def env_action(env, a: sp.ScriptedAction, ee_quat_b: torch.Tensor) -> torch.Tens
 def main() -> None:
     cfg = OneLegReplayRelResiPCfg() if args.sim == "resip" else OneLegReplayRelCfg()
     cfg.scene.num_envs = 1
+    if args.render_every is not None:
+        if args.render_every < 1:
+            raise SystemExit("--render_every must be >= 1")
+        cfg.sim.render_interval = args.render_every
     cfg.furniture.log_resets = True
     if args.part_friction is not None:
         cfg.furniture.part_friction = args.part_friction
