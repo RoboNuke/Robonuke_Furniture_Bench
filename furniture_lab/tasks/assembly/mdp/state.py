@@ -13,8 +13,7 @@ consecutive steps with the hand released (finger width above
 ``furniture.success_release_width``) and clear (the TCP farther than
 ``furniture.success_clearance`` from the pair's second part) -- i.e. it stays put once the
 robot has let go, instead of counting a single frame it passes through or is held in.
-``success_hold_steps: 1`` with ``success_require_release: false`` is FurnitureBench's
-single-step latch.
+``furniture.success_mode: soft`` is FurnitureBench's single-step latch instead.
 """
 
 from __future__ import annotations
@@ -62,6 +61,8 @@ def tracker(env: "ManagerBasedRLEnv") -> AssemblyTracker:
     t = getattr(env, _ATTR, None)
     if t is None:
         fcfg = env.cfg.furniture
+        if fcfg.success_mode not in ("strict", "soft"):
+            raise ValueError(f"furniture.success_mode must be strict or soft, got {fcfg.success_mode!r}")
         pairs = pairs_for(fcfg.task)
         t = AssemblyTracker(
             env.num_envs,
@@ -70,13 +71,13 @@ def tracker(env: "ManagerBasedRLEnv") -> AssemblyTracker:
             pos_threshold_in(fcfg.mesh_frame, fcfg.assembled_pos_threshold),  # OBJ axes -> this frame's
             fcfg.ori_bound,
             env.device,
-            hold_steps=fcfg.success_hold_steps,
+            hold_steps=fcfg.success_hold_steps if fcfg.success_mode == "strict" else 1,
         )
         t._stamp = -1
         setattr(env, _ATTR, t)
     if t._stamp != env.common_step_counter:
         pos, quat = parts_pose_w(env)  # relative poses: any common frame will do
-        clear = hand_clear(env, pos, t.pairs) if env.cfg.furniture.success_require_release else None
+        clear = hand_clear(env, pos, t.pairs) if env.cfg.furniture.success_mode == "strict" else None
         t.update(pos, quat, clear)
         t._stamp = env.common_step_counter
     return t
