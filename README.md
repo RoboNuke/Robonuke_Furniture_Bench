@@ -129,6 +129,12 @@ demo's recorded state and compares the env's 49-d observation with the pkl's ter
 through the FB action term one step at a time (re-synced before each) and reports the EE
 error against the demo's next step. Run it before training a policy on the demos.
 
+`scripts/replay_abs.py --demos <pkl or dir>` (default task `Isaac-Furniture-OneLeg-FBAbs-ResiP-v0`)
+replays each successful demo's absolute rot6d actions (`fb_abs_frames`, what the BC policy
+trains on) open loop from the demo's first state and reports whether the leg assembles, with
+the EE error against the demo. The success rate is the ceiling a perfect clone reaches.
+`--hold` (20) steps of the last action after the demo ends; `--max_demos`; `--print_every` (50).
+
 ### ResiP's sim
 
 `Isaac-Furniture-OneLeg-ResiP-v0`, `-FB-ResiP-v0` and `-FBAbs-ResiP-v0` are the three interfaces in
