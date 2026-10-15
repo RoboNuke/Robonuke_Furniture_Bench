@@ -26,6 +26,7 @@ upstream and what is this port's choice.
 | `Isaac-Furniture-OneLeg-v0` | this port's 56-d (base frame, wxyz, + last action) | 7-d: OSC `pose_rel` (scaled) + binary gripper | RL |
 | `Isaac-Furniture-OneLeg-FB-v0` | **FurnitureBench's own** 49-d `DEFAULT_STATE_OBS` (`ee_pos, ee_quat xyzw, ee_pos_vel, ee_ori_vel, gripper_width, parts_poses` in the AprilTag frame) | **FurnitureBench's own** 8-d `[dpos, dquat xyzw (EE frame), gripper]`, driving the same OSC + gripper (`mdp.FurnitureBenchAction`) | policies trained on the demo pkls (BC, residual) |
 | `Isaac-Furniture-OneLeg-FBAbs-v0` | the FB observation with **every orientation as rot6d** (61-d: `ee_pos, ee_rot6d, ee_pos_vel, ee_ori_vel, gripper_width, parts 5 x [pos, rot6d]`) | 10-d **absolute** target `[goal_pos (base frame), goal_rot6d, gripper]` on the OSC in `pose_abs` mode (`mdp.FurnitureBenchAbsAction`) -- ResiP's `control_mode: pos` | diffusion policies (absolute targets regress better than deltas); the importer derives both columns from the pkls (`furniture_lab.demos.fb_abs_frames`) |
+| `Isaac-Furniture-OneLeg-FBAbs-ResiP-Hybrid-v0` | as `-FBAbs-v0` | 16-d: the abs target + selection 3 + force target 3, on joint torques (`mdp.HybridTorqueAbsAction`, ResiP's sim) | hybrid force/position residuals |
 | `Isaac-Furniture-SquareTable-v0` | as the first | as the first | all four legs |
 
 ## Setup
@@ -113,7 +114,7 @@ put in a group (none by default, so the task ids' observations are unchanged).
 | `wrench_noise_joint_torque` | (0,) | std of the noise on each joint torque, N m: one value or seven |
 | `wrench_noise` | (0,) | std of the noise on the projected wrench: one value, (force, torque), or six |
 | `wrench_coriolis` | false | remove PhysX's Coriolis/centrifugal torques |
-| `wrench_inertial` | false | remove `M q''` (finite-differenced joint acceleration) |
+| `wrench_inertial` | false (true in `-FBAbs-ResiP-Hybrid-v0`) | remove `M q''` (finite-differenced joint acceleration): without it the estimate reads the arm's own acceleration as contact (~1 N in fast free-space moves) |
 | `wrench_projection` | pinv | `pinv` (Moore-Penrose) or `dynamic` (`Lambda J M^-1`) |
 
 `scripts/wrench_probe.py` runs a press-and-twist script with the parts off the table and
@@ -151,6 +152,84 @@ python scripts/collect_scripted.py --sim resip --out_dir ~/Robonuke_Furniture_Be
 `--servo_gain` defaults to 1 there (the joint PD closes a command in a step; the OSC's 20 % per
 step is why the port's default is 5).
 
+### Hybrid force/position control on joint torques
+
+`Isaac-Furniture-OneLeg-FBAbs-ResiP-Hybrid-v0` (`OneLegFBAbsResiPHybridEnvCfg`) is ResiP's sim and
+interface with the arm on joint torques: the arm's drives get no stiffness or damping, and the
+action term `mdp.HybridTorqueAbsAction` (`mdp/hybrid.py`) computes, every physics substep,
+robonuke_rl_core's hybrid law (`envs/forge/control.py`, what its Forge wrapper runs):
+
+    tau = J^T [ (I - S) Lambda (K e - D v) + S (f_d + K_f (f_d - f)) ] + nullspace
+
+(`inertial_decoupling` and `force_feedforward` off: Forge's law, `(I - S)(K e - D v) + S K_f (f_d - f)`).
+The action is `[goal_pos 3, goal_rot6d 6, gripper 1 | selection n | force target n]` (16 with the
+default 3 force axes): a selection > 0 hands that axis to force control, a force target in
+[-1, 1] is scaled by `force_target_bounds`. `f` is the force the EE applies (minus the joint-torque
+estimate of the external wrench, `env.wrench`), `f_d` in the same sense (negative z presses down).
+A reset puts every axis back on position control. The fields are the env cfg's `hybrid`
+(`task.cfg.hybrid.*` from a project config):
+
+| `hybrid.` field | default | meaning |
+|---|---|---|
+| `force_axes` | `[1, 1, 1, 0, 0, 0]` | axes the force branch may take; the selection and force blocks are as wide as its sum |
+| `force_target_bounds` | `[50, 50, 50, 5, 5, 5]` | the force action in [-1, 1] scales to +/- these, N and N m |
+| `default_force_gains` | `[0.1, 0.1, 0.1, 0.01, 0.01, 0.01]` | `K_f` per axis (robonuke_rl_core's default); on x, y, z stable to ~0.3 (below) |
+| `stiffness` | `[300, 300, 300, 500, 500, 500]` here (class default Forge's `[565 x3, 28 x3]`) | `K` per axis |
+| `damping` | `[60.62 x3, 100.62 x3]` here (class default null: `2 sqrt(K)`) | `D` per axis |
+| `kp_null` / `kd_null` | `10` / `6.3246` | nullspace pull toward the reset joints (Forge's) |
+| `inertial_decoupling` | `true` | scale the motion branch by the operational-space inertia `Lambda` (Isaac Lab's OSC order: the force axes' motion zeroed before and after `Lambda`); `K`, `D` are then accelerations per error (1/s^2, 1/s); `false`: Forge's motion branch |
+| `force_feedforward` | `true` | the force branch commands `f_d + K_f (f_d - f)`: a still EE settles at `f_d` for any `K_f`; `false`: Forge's `K_f (f_d - f)`, which settles at `K_f f_d / (1 + K_f)` |
+
+**The gains track like ResiP's controller.** `scripts/hybrid_tracking.py` plays one sequence of
+free-space EE targets (2-3 cm and 15 deg steps, sweeps, 10 Hz policy-like waypoints) through the
+`-FBAbs-ResiP-v0` IK + joint PD and through this term (every axis on position), one gain set per
+env, and ranks them by EE path distance. Measured:
+
+* Forge's law as is (no decoupling) cannot: at Forge's 565 / 28 the path is 11.4 mm / 7.5 deg RMS
+  off, and stiffer, better-damped gains chatter at the substep rate (the light wrist directions
+  go unstable at 1/120 s); the best of 64 was 9.6 mm / 9.7 deg RMS.
+* With `inertial_decoupling`, K 300 / 500 and D 3.5 / 4.5 sqrt(K) (a dominant time constant near the
+  reference's 0.2 s): 0.24 mm RMS (1.4 mm max) and 0.06 deg RMS (0.3 deg max), the roll and pitch
+  steps aside. On those the reference itself swings the EE ~19 mm off its fixed position target
+  (IK + joint PD), where this holds it within 2.5 mm; the whole sequence is 4.0 mm RMS for that
+  reason alone.
+
+```bash
+python scripts/hybrid_tracking.py --mode reference --out ref.pt --headless
+python scripts/hybrid_tracking.py --mode hybrid --reference ref.pt --out search.pt --headless \
+    --kpos 300 --krot 500 --dcoef 3.5 --dcoef_rot 4.5
+python scripts/hybrid_tracking.py --mode press --press_kf 0.1,0.2 --press_force 0,1,2,5,8,10 --out press.pt --headless
+python scripts/hybrid_tracking.py --mode press --press_start above --press_gap 0.02 --press_kf 0.1,0.2 --press_force 1,2,5,8,10 --out press.pt --headless
+```
+
+`--forge_law` runs either mode with both fields off.
+
+**The force branch.** `--mode press` descends onto what is under the EE on position control,
+then hands z to force control (in contact, or `--press_start above` from `--press_gap` above it),
+one env per (`K_f`, target), and reads the force the EE applies by the estimate and by PhysX's
+joint reaction wrench (the truth). Without the feedforward (Forge's law) a -5 N target settled
+exactly at `K_f f_d / (1 + K_f)`: -0.45, -2.5, -3.75 N at `K_f` 0.1, 1, 3, so the default
+pressed with ~9 % of its target. With it, and the inertial estimate, the true force over the last
+2 s of 10 s on force control (N; targets press down):
+
+| `K_f` | targets 0-10 N, in contact | 1-10 N from 0.5 cm and 2 cm above |
+|---|---|---|
+| 0, 0.1, 0.2, 0.3 | every target within 0.01 N | within 0.01 N |
+| 0.5 | -- | rings at 2 N (84 N peak-to-peak) |
+| 1 | within 0.02 N | rings at 5 and 10 N |
+| >= 1.5 | rings at most targets | -- |
+
+The settled ripple (peak-to-peak) is 0.04-0.55 N either way, steady over the 10 s: it varies from
+run to run, not with where force control began (the same in-contact 5 N case gave 0.45 N in one
+run and 0.05 N in another).
+
+With the inertial estimate `K_f` also lowers the EE's apparent mass on the force axis by
+`1 + K_f`, which is what limits it; the default 0.1 keeps a 5x margin. **The impact is not
+damped**: a force axis has no motion damping, so switching to force above the surface hits it
+at whatever speed the target built up -- transient peaks of 15-140 N (0.5-2 cm gap) before
+settling, ~1.3-1.7x the target when switched in contact. At a 0 N target the EE drifts up a
+few mm over 10 s; with nothing to press on, a force axis accelerates the arm away.
+
 ## Replaying FurnitureBench demos
 
 `furniture_lab/demos.py` reads a FurnitureBench `.pkl` into this port's frames (robot-base
@@ -186,7 +265,9 @@ termination so a seated leg is not reset mid-replay.
 
 * The package's Forge-family wrappers (hybrid force/position controller, fragile object,
   efficient reset, contact flags, task metrics) key on a `Forge` task name and do not apply
-  here. A hybrid action space for this env would be a custom action term in `mdp/`.
+  here. The hybrid action space is this repo's own term instead (`-FBAbs-ResiP-Hybrid-v0`, above);
+  it imports robonuke_rl_core's controller math and action split, so the package must be
+  installed.
 * The `6d_rot_mat` orientation wrapper likewise; `ee_quat` is published as a quaternion.
 * Camera observations, upstream's `high` randomization table, and the other furniture.
 * **Nothing here has run in Isaac Sim yet.** The geometry and the assembled check are tested

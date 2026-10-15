@@ -239,3 +239,40 @@ def test_resip_sim_cfgs(cfg_module):
     # the port's cfgs are untouched
     port = cfg_module.OneLegFBAbsEnvCfg()
     assert port.decimation == 6 and port.scene.robot.actuators["panda_shoulder"].stiffness == 0.0
+
+
+def test_the_hybrid_cfg_is_resip_with_the_arm_on_joint_torques(cfg_module):
+    """``OneLegFBAbsResiPHybridEnvCfg``: ResiP's sim and interface, the arm's drives with no
+    stiffness or damping, one hybrid torque term (no IK arm term beside it) and the gripper."""
+    cfg = cfg_module.OneLegFBAbsResiPHybridEnvCfg()
+    assert cfg.decimation == 12 and cfg.episode_length_s == 70.0
+    for group in ("panda_shoulder", "panda_forearm"):
+        assert cfg.scene.robot.actuators[group].stiffness == 0.0
+        assert cfg.scene.robot.actuators[group].damping == 0.0
+    assert cfg.scene.robot.actuators["panda_hand"].stiffness > 0
+    assert not hasattr(cfg.actions, "arm") and not hasattr(cfg.actions, "fb")
+    term = cfg.actions.hybrid
+    assert term.class_type.__name__ == "HybridTorqueAbsAction"
+    assert term.body_name == "panda_hand" and term.joint_names == ["panda_joint.*"]
+    assert term.gripper is not None
+    assert cfg.furniture.gripper_margin == 0.019
+    # the plain ResiP cfg is untouched by the hybrid one
+    assert cfg_module.OneLegFBAbsResiPEnvCfg().scene.robot.actuators["panda_shoulder"].stiffness == 1000.0
+    assert cfg.hybrid.force_axes == [1, 1, 1, 0, 0, 0]
+    # the gains tuned to track like ResiP's IK + joint PD (scripts/hybrid_tracking.py)
+    assert cfg.hybrid.inertial_decoupling is True and cfg.hybrid.force_feedforward is True
+    assert list(cfg.hybrid.default_force_gains)[0:3] == [0.1] * 3
+    # the wrench estimate removes the arm's own inertia here, and only here
+    assert cfg.furniture.wrench_inertial is True
+    assert cfg_module.OneLegFBAbsResiPEnvCfg().furniture.wrench_inertial is False
+    assert list(cfg.hybrid.stiffness) == [300.0] * 3 + [500.0] * 3
+
+
+def test_the_hybrid_task_id_is_registered(cfg_module):
+    import gymnasium as gym
+
+    import furniture_lab.tasks  # noqa: F401
+
+    spec = gym.spec("Isaac-Furniture-OneLeg-FBAbs-ResiP-Hybrid-v0")
+    mod, attr = spec.kwargs["env_cfg_entry_point"].split(":")
+    assert getattr(importlib.import_module(mod), attr).__name__ == "OneLegFBAbsResiPHybridEnvCfg"

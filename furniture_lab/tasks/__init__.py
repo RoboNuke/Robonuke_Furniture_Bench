@@ -30,7 +30,13 @@ gym.register(
     kwargs={"env_cfg_entry_point": f"{__name__}.assembly.assembly_env_cfg:OneLegFBAbsEnvCfg"},
 )
 
-for _suffix, _cfg in (("ResiP", "OneLegResiPEnvCfg"), ("FB-ResiP", "OneLegFBResiPEnvCfg"), ("FBAbs-ResiP", "OneLegFBAbsResiPEnvCfg")):
+for _suffix, _cfg in (
+    ("ResiP", "OneLegResiPEnvCfg"),
+    ("FB-ResiP", "OneLegFBResiPEnvCfg"),
+    ("FBAbs-ResiP", "OneLegFBAbsResiPEnvCfg"),
+    # the same with hybrid force/position control on joint torques (mdp/hybrid.py)
+    ("FBAbs-ResiP-Hybrid", "OneLegFBAbsResiPHybridEnvCfg"),
+):
     gym.register(
         id=f"Isaac-Furniture-OneLeg-{_suffix}-v0",
         entry_point=f"{__name__}.assembly.assembly_env:AssemblyEnv",

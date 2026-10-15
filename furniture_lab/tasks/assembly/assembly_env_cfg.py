@@ -500,7 +500,9 @@ def apply_resip(cfg) -> None:
     cfg.apply_friction()
     cfg.apply_gripper()
     fb = getattr(cfg.actions, "fb", None)
-    if fb is not None:
+    if getattr(cfg.actions, "hybrid", None) is not None:
+        pass  # the hybrid torque term drives the arm itself (OneLegFBAbsResiPHybridEnvCfg)
+    elif fb is not None:
         fb.arm = dik_arm_cfg(absolute=fb.class_type.__name__ == "FurnitureBenchAbsAction")
     else:
         cfg.actions.arm = dik_arm_cfg(absolute=False)
@@ -529,6 +531,37 @@ class OneLegFBAbsResiPEnvCfg(OneLegFBAbsEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         apply_resip(self)
+
+
+# ------------------------------------- hybrid force/position control on joint torques
+@configclass
+class FBAbsHybridActionsCfg:
+    """``[goal_pos 3, goal_rot6d 6, gripper 1 | selection n | force n]`` driving the arm by joint
+    torques (``mdp.HybridTorqueAbsAction``; the controller's fields are the cfg's ``hybrid``)."""
+
+    hybrid = mdp.HybridTorqueAbsActionCfg(asset_name="robot", gripper=ActionsCfg().gripper)
+
+
+@configclass
+class OneLegFBAbsResiPHybridEnvCfg(OneLegFBAbsResiPEnvCfg):
+    """ResiP's sim and interface with the arm on robonuke_rl_core's hybrid force/position law
+    (``mdp/hybrid.py``) instead of differential IK into stiff joint PD: everything else is
+    ``OneLegFBAbsResiPEnvCfg``'s (10 Hz, friction, gripper, observation 61). The arm's drives get
+    no stiffness or damping, so the term's joint torques are all that moves it. The controller
+    starts at ``mdp.hybrid.RESIP_TRACKING_GAINS`` (inertial decoupling on, K / D tuned so the EE
+    tracks targets as ResiP's IK + joint PD does; the force branch with its feedforward). The
+    wrench estimate removes the arm's own inertia here (``furniture.wrench_inertial``), which the
+    force branch reads; the other cfgs keep it off."""
+
+    actions: FBAbsHybridActionsCfg = FBAbsHybridActionsCfg()
+    hybrid: mdp.HybridTorqueCfg = mdp.HybridTorqueCfg(**mdp.hybrid.RESIP_TRACKING_GAINS)
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.furniture.wrench_inertial = True
+        for group in ("panda_shoulder", "panda_forearm"):
+            self.scene.robot.actuators[group].stiffness = 0.0
+            self.scene.robot.actuators[group].damping = 0.0
 
 
 @configclass
