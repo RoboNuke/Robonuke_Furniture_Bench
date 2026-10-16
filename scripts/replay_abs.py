@@ -112,6 +112,10 @@ def zarr_episodes(path: Path):
     ends = np.asarray(z["episode_ends"][:], dtype=np.int64)
     robot_state = np.asarray(z["robot_state"][:], dtype=np.float32)
     parts = np.asarray(z["parts_poses"][:], dtype=np.float32)
+    # ResiP's sim appends the front obstacle's pose (a 6th, fixed body) after the 5 parts
+    if parts.shape[1] not in (35, 42):
+        raise SystemExit(f"{path}: parts_poses is {parts.shape[1]} wide; expected 35 (5 parts) or 42 (+ obstacle)")
+    parts = parts[:, :35]
     actions = np.asarray(z["action/pos"][:], dtype=np.float32)
     success = np.asarray(z["success"][:], dtype=np.int64) if "success" in z else np.ones(len(ends), np.int64)
     start, n = 0, 0
