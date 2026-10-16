@@ -21,9 +21,11 @@ The first state:
   recording's (a 7-dof arm, one EE pose); the EE pose is what the actions are about. The
   settle error is printed per demo.
 
-At the first step the gripper closes, the leg's position relative to the EE is printed for
-this env and for the demo (``here minus demo``, robot-base axes, mm): the leg is untouched until
-then, so a consistent offset across demos is a frame offset between the demos' sim and this one.
+``--carry`` steps after the gripper first closes (the leg held), the leg's position relative to
+the EE is printed for this env and for the demo (``here minus demo``, robot-base axes, mm).
+The fingers centre the leg across their closing axis; along the other axes a consistent
+offset across demos is where the fingers closed on the leg differently -- a frame offset
+between the demos' sim and this one. A large one in every axis means the grasp missed.
 
 That is the ceiling a perfect clone of these demos can reach in this env:
 
@@ -54,6 +56,7 @@ parser.add_argument("--task", default="Isaac-Furniture-OneLeg-FBAbs-ResiP-v0")
 parser.add_argument("--max_demos", type=int, default=None)
 parser.add_argument("--hold", type=int, default=20, help="steps holding the last action after the demo ends")
 parser.add_argument("--settle", type=int, default=30, help="zarr: IK steps driving the arm to the first EE pose")
+parser.add_argument("--carry", type=int, default=15, help="steps after the first gripper close to compare the held leg")
 parser.add_argument("--print_every", type=int, default=50, help="per-step EE error lines (0: off)")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
@@ -223,18 +226,21 @@ def replay(env, name, states, acts, start, recorded_success) -> dict:
     note = start(env) or ""
     T = acts.shape[0]
     errs, first = [], None
-    # the first step the gripper closes: the leg's offset from the EE then, here and in the demo
+    # the leg's offset from the EE once it is held: --carry steps after the first close, here
+    # and in the demo. Fingers centre the leg across their closing axis, so a frame offset
+    # between the demos' sim and this one shows up along the other two axes
     close = next((t for t in range(T) if acts[t, 9] > 0), None)
+    carried = close + args.carry if close is not None and close + args.carry < T else None
     grasp = ""
     for t in range(T + args.hold):
         a = torch.tensor(acts[min(t, T - 1)], device=env.device, dtype=torch.float32).reshape(1, -1)
         env.step(a)
         if first is None and bool(tracker(env).all_assembled()[0]):
             first = t
-        if t == close:
+        if t == carried:
             ours, theirs = leg_from_ee(obs(env)), leg_from_ee(states[t + 1])
             d = (ours - theirs) * 1000
-            grasp = (f"leg-from-EE at the first close (step {t}), here minus demo: "
+            grasp = (f"leg-from-EE {args.carry} steps after the first close (step {t}), here minus demo: "
                      f"x {d[0]:+.1f} y {d[1]:+.1f} z {d[2]:+.1f} mm")
             print(f"[replay]   {grasp}", flush=True)
         if t < T:
