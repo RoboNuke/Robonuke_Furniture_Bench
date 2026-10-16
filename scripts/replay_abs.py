@@ -14,7 +14,9 @@ The first state:
 
 * **pkl** (ours): arm joints, fingers and part poses written exactly.
 * **zarr** (ResiP's, no joint positions; its robot base sits 15 mm lower than here, so its
-  EE and target z are shifted by ``frames.RESIP_BASE_Z_TO_PORT``): the arm is driven to the demo's first EE pose by the
+  EE and target z are shifted by ``frames.RESIP_BASE_Z_TO_PORT``; its sim offsets the three
+  obstacles per episode -- +-2 cm in x and y at low randomness -- and records the front one, so
+  they are moved to each demo's recorded place): the arm is driven to the demo's first EE pose by the
   env's own differential-IK controller (``--settle`` steps of the first pose as the absolute
   target, the first gripper command), then the fingers are set to the recorded width and the
   parts written at their recorded poses. The arm's null-space posture can differ from the
@@ -144,8 +146,10 @@ def zarr_episodes(path: Path):
     # ResiP's sim appends the front obstacle's pose (a 6th, fixed body) after the 5 parts
     if parts.shape[1] not in (35, 42):
         raise SystemExit(f"{path}: parts_poses is {parts.shape[1]} wide; expected 35 (5 parts) or 42 (+ obstacle)")
+    obstacles = None
     if parts.shape[1] == 42:
         check_obstacle(parts[:, 35:38])
+        obstacles = parts[:, 35:38].copy()  # ResiP offsets the obstacles per episode (low: +-2 cm)
     parts = parts[:, :35]
     actions = np.asarray(z["action/pos"][:], dtype=np.float32)
     # ResiP's robot base sits 15 mm lower (frames.RESIP_ROBOT_HEIGHT): its base-frame EE z and
@@ -164,7 +168,10 @@ def zarr_episodes(path: Path):
         n += 1
         states = zarr_states_abs(robot_state[lo:hi], parts[lo:hi])
         states = np.concatenate([states, states[-1:]])  # no observation after the last action
-        first = dict(ee=states[0, 0:9], width=float(robot_state[lo, 15]), parts=parts[lo], grip=float(actions[lo, 9]))
+        first = dict(
+            ee=states[0, 0:9], width=float(robot_state[lo, 15]), parts=parts[lo], grip=float(actions[lo, 9]),
+            obstacle_tag=None if obstacles is None else obstacles[lo],
+        )
         yield f"episode {e}", states, actions[lo:hi], (lambda env, first=first: set_state_ik(env, **first)), True
 
 
@@ -200,7 +207,19 @@ def set_state_exact(env, demo, t: int) -> None:
     _settle_physics(env)
 
 
-def set_state_ik(env, ee: np.ndarray, width: float, parts: np.ndarray, grip: float) -> str:
+def _write_obstacles(env, front_tag: np.ndarray) -> None:
+    """The three obstacles where a ResiP demo had them: the front one at its recorded tag-frame
+    position, the sides at ResiP's fixed offsets from it (-0.075, -/+0.175 m, world axes)."""
+    front = np.asarray(TAG_POS_W) + TAG_ROT_W @ np.asarray(front_tag, dtype=np.float64)
+    origin = env.scene.env_origins[:1]
+    for name, off in (("obstacle_front", (0.0, 0.0)), ("obstacle_right", (-0.075, -0.175)), ("obstacle_left", (-0.075, 0.175))):
+        pos = front + np.array([off[0], off[1], 0.0])
+        pose = torch.tensor([[*pos, 1.0, 0.0, 0.0, 0.0]], device=env.device, dtype=torch.float32)
+        pose[:, :3] += origin
+        env.scene[name].write_root_pose_to_sim(pose)
+
+
+def set_state_ik(env, ee: np.ndarray, width: float, parts: np.ndarray, grip: float, obstacle_tag=None) -> str:
     """Drive the arm to EE pose ``ee`` (pos 3, rot6d 6) with the env's own IK controller, then
     set the fingers to ``width`` and write the parts; returns the settle error."""
     target = torch.tensor(np.concatenate([ee, [grip]]), device=env.device, dtype=torch.float32).reshape(1, -1)
@@ -211,6 +230,8 @@ def set_state_ik(env, ee: np.ndarray, width: float, parts: np.ndarray, grip: flo
     q = robot.data.joint_pos.clone()
     q[:, fingers] = width / 2
     robot.write_joint_state_to_sim(q, torch.zeros_like(q))
+    if obstacle_tag is not None:
+        _write_obstacles(env, obstacle_tag)
     pos, quat = _parts_to_world(parts, MESH_FRAMES[mesh_frame()])
     _write_parts(env, pos, quat, PART_NAMES[: pos.shape[0]])
     _settle_physics(env)

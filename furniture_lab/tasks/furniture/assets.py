@@ -84,6 +84,26 @@ def fixture_cfg(
     )
 
 
+def obstacle_cfg(prim_name: str, size: tuple, pos: tuple, friction: float = TABLE_FRICTION, color=(0.3, 0.3, 0.3)) -> RigidObjectCfg:
+    """One of the three obstacles: a kinematic box, as a rigid object so its pose can be set
+    at runtime (ResiP's sim offsets them per episode; a replay of its demos puts them where
+    each demo had them). Never moved by contact."""
+    return RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/" + prim_name,
+        spawn=sim_utils.CuboidCfg(
+            size=size,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True, disable_gravity=True),
+            mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.002, rest_offset=0.0),
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                static_friction=friction, dynamic_friction=friction, restitution=0.0
+            ),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=color),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=pos),
+    )
+
+
 def ground_cfg() -> AssetBaseCfg:
     """A floor well below the table, so a part that falls off stops somewhere.
 

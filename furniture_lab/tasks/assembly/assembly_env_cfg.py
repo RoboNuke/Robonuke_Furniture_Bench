@@ -81,15 +81,10 @@ class AssemblySceneCfg(InteractiveSceneCfg):
 
     # a mid grey, so the white parts read against it
     table = assets.fixture_cfg("Table", frames.TABLE_SIZE, frames.TABLE_POS, TABLE_FRICTION, color=(0.08, 0.08, 0.08))
-    obstacle_front = assets.fixture_cfg(
-        "ObstacleFront", frames.OBSTACLE_FRONT_SIZE, frames.OBSTACLE_FRONT_POS, color=(0.3, 0.3, 0.3)
-    )
-    obstacle_left = assets.fixture_cfg(
-        "ObstacleLeft", frames.OBSTACLE_SIDE_SIZE, frames.OBSTACLE_SIDE_POS["obstacle_left"], color=(0.3, 0.3, 0.3)
-    )
-    obstacle_right = assets.fixture_cfg(
-        "ObstacleRight", frames.OBSTACLE_SIDE_SIZE, frames.OBSTACLE_SIDE_POS["obstacle_right"], color=(0.3, 0.3, 0.3)
-    )
+    # kinematic rigid objects (not static fixtures) so a replay can place them per demo
+    obstacle_front = assets.obstacle_cfg("ObstacleFront", frames.OBSTACLE_FRONT_SIZE, frames.OBSTACLE_FRONT_POS)
+    obstacle_left = assets.obstacle_cfg("ObstacleLeft", frames.OBSTACLE_SIDE_SIZE, frames.OBSTACLE_SIDE_POS["obstacle_left"])
+    obstacle_right = assets.obstacle_cfg("ObstacleRight", frames.OBSTACLE_SIDE_SIZE, frames.OBSTACLE_SIDE_POS["obstacle_right"])
 
     robot = assets.FRANKA_OSC_CFG
 

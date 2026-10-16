@@ -135,7 +135,7 @@ replays each successful demo's absolute rot6d actions (`fb_abs_frames`, what the
 trains on) open loop from the demo's first state and reports whether the leg assembles, with
 the EE error against the demo. The success rate is the ceiling a perfect clone reaches.
 `--hold` (20) steps of the last action after the demo ends; `--max_demos`; `--print_every` (50).
-`--zarr <ResiP processed .zarr>` replays ResiP's own demos instead: the zarr has no joint positions, so the arm is driven to each demo's first EE pose by the env's IK controller (`--settle`, 30 steps), then the fingers and parts are set; the settle error is printed.
+`--zarr <ResiP processed .zarr>` replays ResiP's own demos instead: the zarr has no joint positions, so the arm is driven to each demo's first EE pose by the env's IK controller (`--settle`, 30 steps), then the fingers and parts are set; the settle error is printed. ResiP's sim offsets the three obstacles per episode (±2 cm in x and y at low randomness) and records the front one, so the replay moves them to each demo's place (the obstacles are kinematic rigid objects for this; nothing else moves them).
 
 ### ResiP's sim
 
