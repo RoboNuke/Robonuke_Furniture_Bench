@@ -21,11 +21,12 @@ The first state:
   recording's (a 7-dof arm, one EE pose); the EE pose is what the actions are about. The
   settle error is printed per demo.
 
-``--carry`` steps after the gripper first closes (the leg held), the leg's position relative to
-the EE is printed for this env and for the demo (``here minus demo``, robot-base axes, mm).
-The fingers centre the leg across their closing axis; along the other axes a consistent
-offset across demos is where the fingers closed on the leg differently -- a frame offset
-between the demos' sim and this one. A large one in every axis means the grasp missed.
+``--carry`` steps after each grasp (the gripper command turning positive: first the table
+top, then the leg), the held part's position relative to the EE is printed for this env and
+for the demo (``here minus demo``, robot-base axes, mm). The fingers centre a part across
+their closing axis; along the other axes a consistent offset across demos is where the
+fingers closed on it differently -- a frame offset between the demos' sim and this one. A
+large one in every axis means that grasp missed.
 
 That is the ceiling a perfect clone of these demos can reach in this env:
 
@@ -56,7 +57,7 @@ parser.add_argument("--task", default="Isaac-Furniture-OneLeg-FBAbs-ResiP-v0")
 parser.add_argument("--max_demos", type=int, default=None)
 parser.add_argument("--hold", type=int, default=20, help="steps holding the last action after the demo ends")
 parser.add_argument("--settle", type=int, default=30, help="zarr: IK steps driving the arm to the first EE pose")
-parser.add_argument("--carry", type=int, default=15, help="steps after the first gripper close to compare the held leg")
+parser.add_argument("--carry", type=int, default=15, help="steps after each grasp to compare the held part")
 parser.add_argument("--print_every", type=int, default=50, help="per-step EE error lines (0: off)")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
@@ -209,16 +210,17 @@ def ee_err(a: np.ndarray, b: np.ndarray) -> tuple:
     return p, math.degrees(float(quat_error_magnitude(qa, qb)))
 
 
-#: one_leg's leg (square_table_leg4): parts slot 4 of the FBAbs observation
-LEG_SLOT = 4
+#: one_leg's grasps, in order: the table top (parts slot 0), then the leg (square_table_leg4,
+#: slot 4)
+GRASPS = (("top", 0), ("leg", 4))
 
 
-def leg_from_ee(o: np.ndarray) -> np.ndarray:
-    """The leg's position relative to the EE, in the robot-base frame (m). The observation
+def part_from_ee(o: np.ndarray, slot: int) -> np.ndarray:
+    """A part's position relative to the EE, in the robot-base frame (m). The observation
     holds the EE in the base frame and the parts in the tag frame."""
-    leg_tag = o[SL["parts_poses"]].reshape(-1, 9)[LEG_SLOT, :3]
-    leg_base = np.asarray(TAG_POS_W) + TAG_ROT_W @ leg_tag
-    return leg_base - o[SL["ee_pos"]]
+    part_tag = o[SL["parts_poses"]].reshape(-1, 9)[slot, :3]
+    part_base = np.asarray(TAG_POS_W) + TAG_ROT_W @ part_tag
+    return part_base - o[SL["ee_pos"]]
 
 
 def replay(env, name, states, acts, start, recorded_success) -> dict:
@@ -226,23 +228,23 @@ def replay(env, name, states, acts, start, recorded_success) -> dict:
     note = start(env) or ""
     T = acts.shape[0]
     errs, first = [], None
-    # the leg's offset from the EE once it is held: --carry steps after the first close, here
-    # and in the demo. Fingers centre the leg across their closing axis, so a frame offset
-    # between the demos' sim and this one shows up along the other two axes
-    close = next((t for t in range(T) if acts[t, 9] > 0), None)
-    carried = close + args.carry if close is not None and close + args.carry < T else None
-    grasp = ""
+    # each grasped part's offset from the EE once it is held: --carry steps after each close
+    # (the gripper command turning positive), here and in the demo. Fingers centre a part
+    # across their closing axis, so a frame offset between the demos' sim and this one shows
+    # up along the other two axes
+    closes = [t for t in range(T) if acts[t, 9] > 0 and (t == 0 or acts[t - 1, 9] <= 0)]
+    checks = {c + args.carry: (name, slot) for c, (name, slot) in zip(closes, GRASPS) if c + args.carry < T}
+    grasps = []
     for t in range(T + args.hold):
         a = torch.tensor(acts[min(t, T - 1)], device=env.device, dtype=torch.float32).reshape(1, -1)
         env.step(a)
         if first is None and bool(tracker(env).all_assembled()[0]):
             first = t
-        if t == carried:
-            ours, theirs = leg_from_ee(obs(env)), leg_from_ee(states[t + 1])
-            d = (ours - theirs) * 1000
-            grasp = (f"leg-from-EE {args.carry} steps after the first close (step {t}), here minus demo: "
-                     f"x {d[0]:+.1f} y {d[1]:+.1f} z {d[2]:+.1f} mm")
-            print(f"[replay]   {grasp}", flush=True)
+        if t in checks:
+            part, slot = checks[t]
+            d = (part_from_ee(obs(env), slot) - part_from_ee(states[t + 1], slot)) * 1000
+            grasps.append(f"held {part} from EE, here minus demo: x {d[0]:+.1f} y {d[1]:+.1f} z {d[2]:+.1f} mm")
+            print(f"[replay]   {grasps[-1]} ({args.carry} steps after that grasp, step {t})", flush=True)
         if t < T:
             p, r = ee_err(obs(env), states[t + 1])
             errs.append((p, r))
@@ -254,7 +256,7 @@ def replay(env, name, states, acts, start, recorded_success) -> dict:
     e = np.array(errs)
     return {
         "name": name,
-        "note": ", ".join(x for x in (note, grasp) if x),
+        "note": "; ".join(x for x in (note, *grasps) if x),
         "steps": T,
         "demo_success": recorded_success,
         "success": first is not None,
