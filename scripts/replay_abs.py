@@ -13,7 +13,8 @@ the leg ends up assembled (the env's own success check, soft by default).
 The first state:
 
 * **pkl** (ours): arm joints, fingers and part poses written exactly.
-* **zarr** (ResiP's, no joint positions): the arm is driven to the demo's first EE pose by the
+* **zarr** (ResiP's, no joint positions; its robot base sits 15 mm lower than here, so its
+  EE and target z are shifted by ``frames.RESIP_BASE_Z_TO_PORT``): the arm is driven to the demo's first EE pose by the
   env's own differential-IK controller (``--settle`` steps of the first pose as the absolute
   target, the first gripper command), then the fingers are set to the recorded width and the
   parts written at their recorded poses. The arm's null-space posture can differ from the
@@ -73,6 +74,7 @@ from furniture_lab.tasks.assembly.assembly_env_cfg import FBABS_OBS_LAYOUT  # no
 from furniture_lab.tasks.assembly.mdp.rot6d import rot6d_to_quat  # noqa: E402
 from furniture_lab.tasks.assembly.mdp.state import tracker  # noqa: E402
 from furniture_lab.tasks.furniture.square_table import MESH_FRAMES, PART_NAMES, mesh_frame  # noqa: E402
+from furniture_lab.tasks.furniture.frames import RESIP_BASE_Z_TO_PORT  # noqa: E402
 
 SL, _s = {}, 0
 for _name, _w in FBABS_OBS_LAYOUT:
@@ -117,6 +119,10 @@ def zarr_episodes(path: Path):
         raise SystemExit(f"{path}: parts_poses is {parts.shape[1]} wide; expected 35 (5 parts) or 42 (+ obstacle)")
     parts = parts[:, :35]
     actions = np.asarray(z["action/pos"][:], dtype=np.float32)
+    # ResiP's robot base sits 15 mm lower (frames.RESIP_ROBOT_HEIGHT): its base-frame EE z and
+    # target z, into this port's base frame
+    robot_state[:, 2] += RESIP_BASE_Z_TO_PORT
+    actions[:, 2] += RESIP_BASE_Z_TO_PORT
     success = np.asarray(z["success"][:], dtype=np.int64) if "success" in z else np.ones(len(ends), np.int64)
     start, n = 0, 0
     for e, end in enumerate(ends):

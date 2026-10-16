@@ -27,6 +27,8 @@ import numpy as np
 
 __all__ = [
     "ROBOT_HEIGHT",
+    "RESIP_ROBOT_HEIGHT",
+    "RESIP_BASE_Z_TO_PORT",
     "TABLE_SURFACE_Z",
     "TABLE_SIZE",
     "TABLE_POS",
@@ -47,6 +49,14 @@ __all__ = [
 
 #: height of the bench clamp the robot sits on, above the table surface (FurnitureBench)
 ROBOT_HEIGHT = 0.015
+
+#: ResiP's fork of FurnitureBench (ankile/furniture-bench, ``furniture_bench/config.py``) sets
+#: ``ROBOT_HEIGHT = 0.0`` ("not using bench clamp"): its robot base sits on the table surface,
+#: 15 mm lower than here, while the tag, the table and the parts are where they are here. So a
+#: ResiP robot-base-frame z (EE poses, EE targets) reads 15 mm higher than this port's for the
+#: same physical pose; tag-frame part poses are unaffected. Add this to a ResiP base-frame z.
+RESIP_ROBOT_HEIGHT = 0.0
+RESIP_BASE_Z_TO_PORT = RESIP_ROBOT_HEIGHT - ROBOT_HEIGHT
 
 #: the table surface, in the robot-base frame
 TABLE_SURFACE_Z = -ROBOT_HEIGHT
