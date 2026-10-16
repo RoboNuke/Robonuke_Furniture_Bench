@@ -82,7 +82,12 @@ from furniture_lab.tasks.assembly.assembly_env_cfg import FBABS_OBS_LAYOUT  # no
 from furniture_lab.tasks.assembly.mdp.rot6d import rot6d_to_quat  # noqa: E402
 from furniture_lab.tasks.assembly.mdp.state import tracker  # noqa: E402
 from furniture_lab.tasks.furniture.square_table import MESH_FRAMES, PART_NAMES, mesh_frame  # noqa: E402
-from furniture_lab.tasks.furniture.frames import RESIP_BASE_Z_TO_PORT, TAG_POS_W, TAG_ROT_W  # noqa: E402
+from furniture_lab.tasks.furniture.frames import (  # noqa: E402
+    OBSTACLE_FRONT_POS,
+    RESIP_BASE_Z_TO_PORT,
+    TAG_POS_W,
+    TAG_ROT_W,
+)
 
 SL, _s = {}, 0
 for _name, _w in FBABS_OBS_LAYOUT:
@@ -114,6 +119,20 @@ def zarr_states_abs(robot_state: np.ndarray, parts: np.ndarray) -> np.ndarray:
     return np.concatenate([robot_state, np.concatenate([p[:, :, :3], rot], axis=-1).reshape(T, 45)], axis=-1).astype(np.float32)
 
 
+def check_obstacle(recorded_tag: np.ndarray) -> None:
+    """Once, at the start: ResiP's recorded front-obstacle position (tag frame, every frame)
+    against this scene's (``frames.OBSTACLE_FRONT_POS``, robot-base frame, into the tag frame)."""
+    ours = TAG_ROT_W.T @ (np.asarray(OBSTACLE_FRONT_POS) - np.asarray(TAG_POS_W))
+    theirs, spread = recorded_tag.mean(0), recorded_tag.std(0)
+    d = (ours - theirs) * 1000
+    print(
+        f"[replay] front obstacle, tag frame: demos {np.round(theirs, 4)} (spread {np.round(spread * 1000, 2)} mm), "
+        f"this scene {np.round(ours, 4)}; here minus demos x {d[0]:+.1f} y {d[1]:+.1f} z {d[2]:+.1f} mm "
+        f"(robot-base axes: {np.round(TAG_ROT_W @ d, 1)} mm)",
+        flush=True,
+    )
+
+
 def zarr_episodes(path: Path):
     """The same tuple per successful episode of ResiP's zarr; the start reached by IK."""
     import zarr
@@ -125,6 +144,8 @@ def zarr_episodes(path: Path):
     # ResiP's sim appends the front obstacle's pose (a 6th, fixed body) after the 5 parts
     if parts.shape[1] not in (35, 42):
         raise SystemExit(f"{path}: parts_poses is {parts.shape[1]} wide; expected 35 (5 parts) or 42 (+ obstacle)")
+    if parts.shape[1] == 42:
+        check_obstacle(parts[:, 35:38])
     parts = parts[:, :35]
     actions = np.asarray(z["action/pos"][:], dtype=np.float32)
     # ResiP's robot base sits 15 mm lower (frames.RESIP_ROBOT_HEIGHT): its base-frame EE z and
