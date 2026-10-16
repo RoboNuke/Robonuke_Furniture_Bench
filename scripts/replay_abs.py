@@ -21,6 +21,10 @@ The first state:
   recording's (a 7-dof arm, one EE pose); the EE pose is what the actions are about. The
   settle error is printed per demo.
 
+At the first step the gripper closes, the leg's position relative to the EE is printed for
+this env and for the demo (``here minus demo``, robot-base axes, mm): the leg is untouched until
+then, so a consistent offset across demos is a frame offset between the demos' sim and this one.
+
 That is the ceiling a perfect clone of these demos can reach in this env:
 
 * most demos succeed -> the action interface reproduces the demos; the BC gap is learning.
@@ -74,7 +78,7 @@ from furniture_lab.tasks.assembly.assembly_env_cfg import FBABS_OBS_LAYOUT  # no
 from furniture_lab.tasks.assembly.mdp.rot6d import rot6d_to_quat  # noqa: E402
 from furniture_lab.tasks.assembly.mdp.state import tracker  # noqa: E402
 from furniture_lab.tasks.furniture.square_table import MESH_FRAMES, PART_NAMES, mesh_frame  # noqa: E402
-from furniture_lab.tasks.furniture.frames import RESIP_BASE_Z_TO_PORT  # noqa: E402
+from furniture_lab.tasks.furniture.frames import RESIP_BASE_Z_TO_PORT, TAG_POS_W, TAG_ROT_W  # noqa: E402
 
 SL, _s = {}, 0
 for _name, _w in FBABS_OBS_LAYOUT:
@@ -202,16 +206,37 @@ def ee_err(a: np.ndarray, b: np.ndarray) -> tuple:
     return p, math.degrees(float(quat_error_magnitude(qa, qb)))
 
 
+#: one_leg's leg (square_table_leg4): parts slot 4 of the FBAbs observation
+LEG_SLOT = 4
+
+
+def leg_from_ee(o: np.ndarray) -> np.ndarray:
+    """The leg's position relative to the EE, in the robot-base frame (m). The observation
+    holds the EE in the base frame and the parts in the tag frame."""
+    leg_tag = o[SL["parts_poses"]].reshape(-1, 9)[LEG_SLOT, :3]
+    leg_base = np.asarray(TAG_POS_W) + TAG_ROT_W @ leg_tag
+    return leg_base - o[SL["ee_pos"]]
+
+
 def replay(env, name, states, acts, start, recorded_success) -> dict:
     env.reset()
     note = start(env) or ""
     T = acts.shape[0]
     errs, first = [], None
+    # the first step the gripper closes: the leg's offset from the EE then, here and in the demo
+    close = next((t for t in range(T) if acts[t, 9] > 0), None)
+    grasp = ""
     for t in range(T + args.hold):
         a = torch.tensor(acts[min(t, T - 1)], device=env.device, dtype=torch.float32).reshape(1, -1)
         env.step(a)
         if first is None and bool(tracker(env).all_assembled()[0]):
             first = t
+        if t == close:
+            ours, theirs = leg_from_ee(obs(env)), leg_from_ee(states[t + 1])
+            d = (ours - theirs) * 1000
+            grasp = (f"leg-from-EE at the first close (step {t}), here minus demo: "
+                     f"x {d[0]:+.1f} y {d[1]:+.1f} z {d[2]:+.1f} mm")
+            print(f"[replay]   {grasp}", flush=True)
         if t < T:
             p, r = ee_err(obs(env), states[t + 1])
             errs.append((p, r))
@@ -223,7 +248,7 @@ def replay(env, name, states, acts, start, recorded_success) -> dict:
     e = np.array(errs)
     return {
         "name": name,
-        "note": note,
+        "note": ", ".join(x for x in (note, grasp) if x),
         "steps": T,
         "demo_success": recorded_success,
         "success": first is not None,
