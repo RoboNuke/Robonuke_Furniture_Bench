@@ -84,6 +84,7 @@ from furniture_lab.demos import (  # noqa: E402
     mat_to_rot6d,
     quat_to_mat,
     quat_xyzw_to_wxyz,
+    resip_unscale_rotation,
 )
 from furniture_lab.tasks.assembly.assembly_env_cfg import FBABS_OBS_LAYOUT  # noqa: E402
 from furniture_lab.tasks.assembly.mdp.rot6d import rot6d_to_quat  # noqa: E402
@@ -172,12 +173,16 @@ def zarr_episodes(path: Path):
             break
         n += 1
         states = zarr_states_abs(robot_state[lo:hi], parts[lo:hi])
+        acts = actions[lo:hi].copy()
+        # ResiP's processing shrank the episode's rotation deltas by one factor (demos.py)
+        acts[:, 3:9], f = resip_unscale_rotation(robot_state[lo:hi, 3:9], acts[:, 3:9])
+        print(f"[replay] episode {e}: rotation deltas scaled back up by {f:.3f}", flush=True)
         states = np.concatenate([states, states[-1:]])  # no observation after the last action
         first = dict(
             ee=states[0, 0:9], width=float(robot_state[lo, 15]), parts=parts[lo], grip=float(actions[lo, 9]),
             obstacle_tag=None if obstacles is None else obstacles[lo],
         )
-        yield f"episode {e}", states, actions[lo:hi], (lambda env, first=first: set_state_ik(env, **first)), True
+        yield f"episode {e}", states, acts, (lambda env, first=first: set_state_ik(env, **first)), True
 
 
 # ------------------------------------------------------------------------------ the start state

@@ -35,7 +35,7 @@ What is upstream and what is this port's choice:
 from __future__ import annotations
 
 from dataclasses import MISSING
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import isaaclab.sim as sim_utils
 from isaaclab.controllers import DifferentialIKControllerCfg, OperationalSpaceControllerCfg
@@ -137,6 +137,10 @@ class FurnitureCfg:
     gripper_stiffness: float = 600.0  # N/m: ~9 N squeeze on a 30 mm leg
     gripper_damping: float = 40.0
     gripper_effort_limit: float = 30.0  # N per finger
+    #: max finger joint speed (m/s per finger; PhysX max joint velocity), None = the asset's.
+    #: ResiP's effort-mode fingers (13 N against DOF friction 15) close at a steady ~57 mm/s
+    #: per finger (11.4 mm of width per 10 Hz step in their teleop demos)
+    gripper_velocity_limit: Optional[float] = None
     #: the FB action terms' gripper hysteresis: the command flips only when the action's sign
     #: changes and its size exceeds this (ResiP / FurnitureRLSimEnv's grasp_margin, 0.019);
     #: 0 = flip on the sign, Isaac Lab's binary term as is
@@ -325,6 +329,8 @@ class AssemblyEnvCfg(ManagerBasedRLEnvCfg):
         for name in ("effort_limit", "effort_limit_sim"):
             if hasattr(act, name):
                 setattr(act, name, float(self.furniture.gripper_effort_limit))
+        if self.furniture.gripper_velocity_limit is not None:
+            act.velocity_limit_sim = float(self.furniture.gripper_velocity_limit)
 
     def apply_friction(self) -> None:
         """Push ``furniture.part_friction`` / ``table_friction`` into the startup friction
@@ -454,12 +460,15 @@ class OneLegFBAbsEnvCfg(OneLegEnvCfg):
 # --------------------------------------------- ResiP's sim (FurnitureRLSimEnv), for the demos
 #: what ResiP's BC and RL ran in (``furniture_bench/envs/furniture_rl_sim_env.py`` of their
 #: fork): 10 Hz policy (dt 1/60 x 6 there; 1/120 x 12 here, the same 0.1 s with this port's
-#: physics step), the arm on differential IK into stiff joint PD (1000 / 200), the finger
-#: drive 600 N/m capped at 13 N, friction 0.15 parts / 0.10 table (FurnitureSim's), and the gripper
+#: physics step), the arm on differential IK into stiff joint PD (1000 / 200), the fingers
+#: at a constant 13 N closing at ~57 mm/s (their effort mode, emulated), friction 0.15 parts / 0.10 table (FurnitureSim's), and the gripper
 #: hysteresis. Episodes 70 s (their 700-step rollout cap at 10 Hz).
 RESIP_DECIMATION = 12
 RESIP_ARM_STIFFNESS = 1000.0
 RESIP_ARM_DAMPING = 200.0
+#: the effort-mode gripper emulation (``apply_resip``): N/m, and m/s per finger
+RESIP_GRIPPER_STIFFNESS = 10000.0
+RESIP_GRIPPER_SPEED = 0.057
 
 
 def dik_arm_cfg(absolute: bool) -> DifferentialInverseKinematicsActionCfg:
@@ -488,9 +497,13 @@ def apply_resip(cfg) -> None:
         cfg.scene.robot.actuators[group].damping = RESIP_ARM_DAMPING
     f = cfg.furniture
     f.part_friction, f.table_friction = 0.15, 0.10
-    # finger drive capped at ResiP's 13 N; 600 N/m (as the port: a stiffer drive pushed the
-    # fingers into the leg), ~9 N squeeze on a 30 mm leg -- the setting the resip demos use
-    f.gripper_stiffness, f.gripper_damping, f.gripper_effort_limit = 600.0, 40.0, 13.0
+    # ResiP's fingers are effort mode: a constant 13 N per finger against DOF friction 15, so
+    # they close at a steady ~57 mm/s and squeeze 13 N on whatever they hold. Emulated by a
+    # drive stiff enough to sit at its 13 N cap until within 1.3 mm of the target, and the
+    # finger speed capped at the speed their demos show (the old 600 N/m drive snapped shut in
+    # 1-2 steps and knocked the leg 6-18 mm at the grasp; theirs takes 6-8 steps)
+    f.gripper_stiffness, f.gripper_damping, f.gripper_effort_limit = RESIP_GRIPPER_STIFFNESS, 10.0, 13.0
+    f.gripper_velocity_limit = RESIP_GRIPPER_SPEED
     f.gripper_margin = 0.019
     cfg.apply_friction()
     cfg.apply_gripper()

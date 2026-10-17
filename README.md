@@ -135,14 +135,14 @@ replays each successful demo's absolute rot6d actions (`fb_abs_frames`, what the
 trains on) open loop from the demo's first state and reports whether the leg assembles, with
 the EE error against the demo. The success rate is the ceiling a perfect clone reaches.
 `--hold` (20) steps of the last action after the demo ends; `--max_demos`; `--print_every` (50).
-`--zarr <ResiP processed .zarr>` replays ResiP's own demos instead: the zarr has no joint positions, so the arm is driven to each demo's first EE pose by the env's IK controller (`--settle`, 30 steps), then the fingers and parts are set; the settle error is printed. ResiP's sim offsets the three obstacles per episode (±2 cm in x and y at low randomness) and records the front one, so the replay moves them to each demo's place (the obstacles are kinematic rigid objects for this; nothing else moves them).
+`--zarr <ResiP processed .zarr>` replays ResiP's own demos instead (each episode's rotation targets first scaled back up by `demos.resip_unscale_rotation`: ResiP's `process_pickles.py` shrinks an episode's rotation deltas by one factor, ~12, so their norm over the episode is 0.35 rad; the factor printed is 20° / the stored plateau): the zarr has no joint positions, so the arm is driven to each demo's first EE pose by the env's IK controller (`--settle`, 30 steps), then the fingers and parts are set; the settle error is printed. ResiP's sim offsets the three obstacles per episode (±2 cm in x and y at low randomness) and records the front one, so the replay moves them to each demo's place (the obstacles are kinematic rigid objects for this; nothing else moves them).
 
 ### ResiP's sim
 
 `Isaac-Furniture-OneLeg-ResiP-v0`, `-FB-ResiP-v0` and `-FBAbs-ResiP-v0` are the three interfaces in
 ResiP's FurnitureRLSimEnv (`assembly_env_cfg.apply_resip`): a 10 Hz policy (1/120 s physics x 12),
 the arm on differential IK (least squares) into joint PD 1000 / 200 instead of the OSC, friction
-0.15 parts / 0.10 table, a 600 N/m finger drive capped at 13 N (ResiP's 13 N; a stiffer drive pushed the fingers into the leg), the
+0.15 parts / 0.10 table, ResiP's effort-mode fingers emulated (a 10000 N/m drive capped at 13 N, so a constant 13 N squeeze, and the finger speed capped at 0.057 m/s: `furniture.gripper_velocity_limit`, the steady closing speed in their teleop demos), the
 FB action terms' gripper hysteresis (`furniture.gripper_margin` 0.019: the command flips only on a
 clear sign change), and 70 s episodes (their 700-step cap). Demos for them:
 

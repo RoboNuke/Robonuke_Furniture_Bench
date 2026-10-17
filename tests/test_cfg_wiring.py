@@ -233,6 +233,8 @@ def test_resip_sim_cfgs(cfg_module):
         assert cfg.scene.robot.actuators["panda_forearm"].damping == 200.0
         f = cfg.furniture
         assert (f.part_friction, f.table_friction, f.gripper_effort_limit, f.gripper_margin) == (0.15, 0.10, 13.0, 0.019)
+        assert f.gripper_velocity_limit == 0.057 and cfg.scene.robot.actuators["panda_hand"].velocity_limit_sim == 0.057
+        assert cfg.scene.robot.actuators["panda_hand"].stiffness == 10000.0
         arm = cfg.actions.fb.arm if hasattr(cfg.actions, "fb") else cfg.actions.arm
         assert arm.controller.use_relative_mode is (not absolute) and arm.controller.ik_method == "pinv"
         assert arm.body_offset.pos == cfg_module.EE_OFFSET

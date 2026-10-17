@@ -74,3 +74,45 @@ def test_loader_accepts_torch_tensors(tmp_path):
         pickle.dump(data, f)
     d = demos.load_demo(p, frame="uwlab")
     assert d.parts_pos.shape == (5, 5, 3) and d.gripper_width.shape == (5,)
+
+
+def _resip_episode(rng, T=60, n_sat=10, scale_clip=True):
+    """Raw teleop rotation deltas (some at the 20 deg bound), shrunk like ResiP's
+    process_pickles (one factor so the episode norm is 0.35), composed onto EE orientations."""
+    from scipy.spatial.transform import Rotation
+
+    axes = rng.normal(size=(T, 3))
+    axes /= np.linalg.norm(axes, axis=1, keepdims=True)
+    mag = rng.uniform(0.0, np.deg2rad(15.0), size=T)
+    mag[rng.choice(T, n_sat, replace=False)] = np.deg2rad(20.0)
+    raw = axes * mag[:, None]
+    norm = np.linalg.norm(raw)
+    stored = raw * (0.35 / norm) if scale_clip and norm > 0.35 else raw
+    R = Rotation.random(T, random_state=1).as_matrix()
+    ee = np.stack([demos.mat_to_rot6d(m) for m in R])
+    tgt = np.stack([demos.mat_to_rot6d(m) for m in R @ Rotation.from_rotvec(stored).as_matrix()])
+    raw_tgt = np.stack([demos.mat_to_rot6d(m) for m in R @ Rotation.from_rotvec(raw).as_matrix()])
+    return ee.astype(np.float32), tgt.astype(np.float32), raw_tgt, norm / 0.35
+
+
+def test_resip_unscale_rotation_recovers_the_raw_targets():
+    ee, tgt, raw_tgt, true_f = _resip_episode(np.random.default_rng(0))
+    fixed, f = demos.resip_unscale_rotation(ee, tgt)
+    assert abs(f - true_f) / true_f < 1e-3
+    assert np.abs(fixed - raw_tgt).max() < 1e-3
+
+
+def test_resip_unscale_rotation_unclipped_episode_is_untouched():
+    rng = np.random.default_rng(1)
+    ee, tgt, _, _ = _resip_episode(rng, T=3, n_sat=0, scale_clip=False)
+    tgt_small = ee.copy()  # zero deltas: norm 0, under 0.35
+    fixed, f = demos.resip_unscale_rotation(ee, tgt_small)
+    assert f == 1.0 and np.abs(fixed - ee).max() < 1e-5
+
+
+def test_resip_unscale_rotation_fails_without_a_plateau():
+    import pytest
+
+    ee, tgt, _, _ = _resip_episode(np.random.default_rng(2), n_sat=1)
+    with pytest.raises(ValueError, match="not recoverable"):
+        demos.resip_unscale_rotation(ee, tgt)

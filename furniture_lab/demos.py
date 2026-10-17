@@ -35,7 +35,7 @@ from .tasks.furniture.square_table import MESH_FRAMES, PART_NAMES, mesh_frame
 
 __all__ = [
     "Demo", "load_demo", "quat_xyzw_to_wxyz", "quat_to_mat", "mat_to_quat",
-    "mat_to_rot6d", "rot6d_to_mat", "FB_STATE_KEYS", "fb_state", "fb_abs_state", "fb_abs_action", "fb_abs_frames",
+    "mat_to_rot6d", "rot6d_to_mat", "resip_unscale_rotation", "FB_STATE_KEYS", "fb_state", "fb_abs_state", "fb_abs_action", "fb_abs_frames",
 ]
 
 #: FurnitureBench's DEFAULT_STATE_OBS keys of ``robot_state``, in order (then ``parts_poses``)
@@ -230,3 +230,42 @@ def fb_abs_frames(data: Dict[str, Any]) -> tuple:
         states = np.concatenate([states, states[-1:]])
     actions = np.stack([fb_abs_action(obs[t], acts[t]) for t in range(T)])
     return states, actions
+
+
+# ------------------------------------------------------------ ResiP's processed zarr, NumPy
+#: ResiP's teleop clipped each raw step's rotation to 20 deg (robust-rearrangement
+#: ``data_collector_sm.py``: ``ori_bounds_deg=20``), and its ``process_pickles.py`` then calls
+#: ``clip_quat_xyzw_magnitude(..., clip_mag=0.35)``, whose ``np.linalg.norm`` has no axis: it
+#: scales every rotation delta of an episode by ONE factor so the episode-wide norm
+#: ``sqrt(sum ||rotvec_t||^2)`` is 0.35 rad. The steps that hit the 20 deg teleop bound all
+#: land on one plateau value, so the factor is exactly ``20 deg / plateau``.
+RESIP_RAW_ROT_STEP = np.deg2rad(20.0)
+RESIP_EPISODE_ROT_NORM = 0.35
+
+
+def resip_unscale_rotation(ee_rot6d: np.ndarray, target_rot6d: np.ndarray, min_plateau: int = 5) -> tuple:
+    """One episode's ``(T, 6)`` recorded EE rot6d and ``(T, 6)`` zarr target rot6d -> the
+    targets ResiP's sim was actually sent ``R_ee exp(f [log(R_ee^T R_target)])`` and ``f``.
+
+    ``f`` is 1 when the episode's norm is under 0.35 (the clip did not fire). Raises when the
+    clip fired but fewer than ``min_plateau`` steps sit on the plateau (``f`` not recoverable)."""
+    from scipy.spatial.transform import Rotation
+
+    R = np.stack([rot6d_to_mat(r) for r in ee_rot6d])
+    Rt = np.stack([rot6d_to_mat(r) for r in target_rot6d])
+    rv = Rotation.from_matrix(np.swapaxes(R, 1, 2) @ Rt).as_rotvec()
+    mag = np.linalg.norm(rv, axis=1)
+    norm = float(np.linalg.norm(rv))
+    if norm < RESIP_EPISODE_ROT_NORM - 1e-4:
+        f = 1.0
+    else:
+        plateau = mag.max()
+        on = int((np.abs(mag - plateau) < 1e-5).sum())
+        if on < min_plateau:
+            raise ValueError(
+                f"episode rotation norm {norm:.4f} (clipped) but only {on} steps on the plateau "
+                f"{np.degrees(plateau):.4f} deg: the per-episode scale is not recoverable"
+            )
+        f = float(RESIP_RAW_ROT_STEP / plateau)
+    fixed = R @ Rotation.from_rotvec(rv * f).as_matrix()
+    return np.stack([mat_to_rot6d(m) for m in fixed]).astype(np.float32), f
