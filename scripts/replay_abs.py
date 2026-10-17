@@ -37,7 +37,8 @@ That is the ceiling a perfect clone of these demos can reach in this env:
   EE error grows (per-step lines) and where the leg goes.
 
 Some open-loop drift is physics (contact is chaotic), so a few failures are expected; a
-failure rate near the BC policy's is the signal. Successful demos only (``fails/`` skipped,
+failure rate near the BC policy's is the signal. ``--save DIR`` writes each demo's per-step
+data (this env and the demo side by side, plus the arm and finger joints) to ``DIR/<name>.npz``. Successful demos only (``fails/`` skipped,
 zarr episodes with ``success`` 0 skipped).
 """
 
@@ -60,6 +61,10 @@ parser.add_argument("--max_demos", type=int, default=None)
 parser.add_argument("--hold", type=int, default=20, help="steps holding the last action after the demo ends")
 parser.add_argument("--settle", type=int, default=30, help="zarr: IK steps driving the arm to the first EE pose")
 parser.add_argument("--carry", type=int, default=15, help="steps after each grasp to compare the held part")
+parser.add_argument(
+    "--save", default=None, metavar="DIR",
+    help="write one .npz per demo with the per-step data, this env and the demo side by side (see save_trace)",
+)
 parser.add_argument("--print_every", type=int, default=50, help="per-step EE error lines (0: off)")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
@@ -265,9 +270,58 @@ def part_from_ee(o: np.ndarray, slot: int) -> np.ndarray:
     return part_base - o[SL["ee_pos"]]
 
 
+def robot_snapshot(env) -> dict:
+    """The arm and finger joint state of env 0: position, target, velocity, applied effort."""
+    robot = env.scene["robot"]
+    d = robot.data
+    out = {}
+    for key, ids in (("arm", robot.find_joints("panda_joint.*")[0]), ("finger", robot.find_joints("panda_finger_joint.*")[0])):
+        out[f"{key}_q"] = d.joint_pos[0, ids].cpu().numpy()
+        out[f"{key}_q_target"] = d.joint_pos_target[0, ids].cpu().numpy()
+        out[f"{key}_qd"] = d.joint_vel[0, ids].cpu().numpy()
+        out[f"{key}_effort"] = d.applied_torque[0, ids].cpu().numpy()
+    return out
+
+
+def save_trace(path: Path, name: str, states, acts, trace: list, start_obs, start_robot, meta: dict, env) -> None:
+    """One demo's replay as arrays. Per step ``t`` (the action ``acts[t]`` sent, then read):
+
+    * ``obs_here`` (T, 61) / ``obs_demo`` (T, 61): this env's FBAbs observation after step t and
+      the demo's recorded one at t+1 (same layout: ee_pos 3, ee_rot6d 6, ee_pos_vel 3,
+      ee_ori_vel 3, gripper_width 1, 5 parts x [pos 3, rot6d 6] in the tag frame);
+    * ``action`` (T, 10): the absolute target sent (goal pos 3, goal rot6d 6, gripper);
+    * ``arm_q`` / ``arm_q_target`` / ``arm_qd`` / ``arm_effort`` (T, 7) and ``finger_*`` (T, 2):
+      the joints after step t (targets as the controller last set them);
+    * ``assembled`` (T,): the env's success flag;
+    * ``start_obs`` (61) / ``start_*``: this env right after the start state was set (before
+      step 0), ``demo_start_obs``: the demo's first recorded observation;
+    * ``joint_names``, ``arm_limits`` (7, 2): for reading the joint arrays;
+    * ``meta``: a JSON string (name, success, settle error, grasp offsets, obstacle).
+    """
+    import json
+
+    robot = env.scene["robot"]
+    arm = robot.find_joints("panda_joint.*")[0]
+    arrays = {k: np.stack([row[k] for row in trace]) for k in trace[0]}
+    np.savez_compressed(
+        path,
+        **arrays,
+        obs_demo=states[1 : len(trace) + 1] if len(trace) < states.shape[0] else states[1:],
+        action=acts[: len(trace)],
+        start_obs=start_obs,
+        demo_start_obs=states[0],
+        **{f"start_{k}": v for k, v in start_robot.items()},
+        joint_names=np.array(robot.joint_names),
+        arm_limits=robot.data.soft_joint_pos_limits[0, arm].cpu().numpy(),
+        meta=json.dumps(meta),
+    )
+
+
 def replay(env, name, states, acts, start, recorded_success) -> dict:
     env.reset()
     note = start(env) or ""
+    trace = []
+    start_obs, start_robot = obs(env), robot_snapshot(env)
     T = acts.shape[0]
     errs, first = [], None
     # each grasped part's offset from the EE once it is held: --carry steps after each close
@@ -287,6 +341,8 @@ def replay(env, name, states, acts, start, recorded_success) -> dict:
             d = (part_from_ee(obs(env), slot) - part_from_ee(states[t + 1], slot)) * 1000
             grasps.append(f"held {part} from EE, here minus demo: x {d[0]:+.1f} y {d[1]:+.1f} z {d[2]:+.1f} mm")
             print(f"[replay]   {grasps[-1]} ({args.carry} steps after that grasp, step {t})", flush=True)
+        if args.save and t < T:
+            trace.append({"obs_here": obs(env), "assembled": np.array(bool(tracker(env).all_assembled()[0])), **robot_snapshot(env)})
         if t < T:
             p, r = ee_err(obs(env), states[t + 1])
             errs.append((p, r))
@@ -296,6 +352,14 @@ def replay(env, name, states, acts, start, recorded_success) -> dict:
     parts_now = o[SL["parts_poses"]].reshape(-1, 9)[:, :3]
     parts_demo = states[-1][SL["parts_poses"]].reshape(-1, 9)[:, :3]
     e = np.array(errs)
+    if args.save:
+        out = Path(args.save).expanduser()
+        out.mkdir(parents=True, exist_ok=True)
+        meta = {"name": name, "note": note, "grasps": grasps, "success": first is not None, "at": first,
+                "steps": T, "task": args.task, "source": args.zarr or args.demos}
+        path = out / (name.replace(" ", "_") + ".npz")
+        save_trace(path, name, states, acts, trace, start_obs, start_robot, meta, env)
+        print(f"[replay]   trace: {path}", flush=True)
     return {
         "name": name,
         "note": "; ".join(x for x in (note, *grasps) if x),
