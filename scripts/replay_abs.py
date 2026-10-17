@@ -140,6 +140,26 @@ def check_obstacle(recorded_tag: np.ndarray) -> None:
     )
 
 
+def _rot6d_rows_to_mat(r6: np.ndarray) -> np.ndarray:
+    """``(T, 6)`` rot6d (first two rows of R) -> ``(T, 3, 3)``, Gram-Schmidt."""
+    a, b = r6[:, 0:3], r6[:, 3:6]
+    a = a / np.linalg.norm(a, axis=1, keepdims=True)
+    b = b - (a * b).sum(1, keepdims=True) * a
+    b = b / np.linalg.norm(b, axis=1, keepdims=True)
+    return np.stack([a, b, np.cross(a, b)], axis=1)
+
+
+def resip_rot_fix(ee_rot6d: np.ndarray, target_rot6d: np.ndarray) -> np.ndarray:
+    """ResiP's zarr target rotation ``R_ee D`` turns the opposite way to what its robot did:
+    the demo's next EE orientation matches ``R_ee D^T`` (median 1.7 deg) and not ``R_ee D``
+    (14 deg) over the rotating steps of the 8 traced episodes. Returns ``R_ee D^T`` as rot6d."""
+    R = _rot6d_rows_to_mat(ee_rot6d.astype(np.float64))
+    Rt = _rot6d_rows_to_mat(target_rot6d.astype(np.float64))
+    D = np.swapaxes(R, 1, 2) @ Rt
+    fixed = R @ np.swapaxes(D, 1, 2)
+    return np.stack([mat_to_rot6d(m) for m in fixed]).astype(np.float32)
+
+
 def zarr_episodes(path: Path):
     """The same tuple per successful episode of ResiP's zarr; the start reached by IK."""
     import zarr
@@ -161,6 +181,7 @@ def zarr_episodes(path: Path):
     # target z, into this port's base frame
     robot_state[:, 2] += RESIP_BASE_Z_TO_PORT
     actions[:, 2] += RESIP_BASE_Z_TO_PORT
+    actions[:, 3:9] = resip_rot_fix(robot_state[:, 3:9], actions[:, 3:9])
     success = np.asarray(z["success"][:], dtype=np.int64) if "success" in z else np.ones(len(ends), np.int64)
     start, n = 0, 0
     for e, end in enumerate(ends):
