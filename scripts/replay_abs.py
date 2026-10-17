@@ -329,7 +329,42 @@ def save_trace(path: Path, name: str, states, acts, trace: list, start_obs, star
     )
 
 
-def replay(env, name, states, acts, start, recorded_success) -> dict:
+class Skip:
+    """Ends the current replay early: the N key in the viewer window, or Enter in the terminal."""
+
+    def __init__(self):
+        self.flag, self._sub = False, None
+        try:  # the viewer's keyboard (not there headless)
+            import carb
+            import omni.appwindow
+
+            inp = carb.input.acquire_input_interface()
+            kb = omni.appwindow.get_default_app_window().get_keyboard()
+
+            def on_key(event, *_):
+                if event.type == carb.input.KeyboardEventType.KEY_PRESS and event.input == carb.input.KeyboardInput.N:
+                    self.flag = True
+                return True
+
+            self._sub = inp.subscribe_to_keyboard_events(kb, on_key)
+        except Exception:  # noqa: BLE001 -- headless or no app window: the terminal only
+            self._sub = None
+        self._tty = sys.stdin.isatty()
+
+    def requested(self) -> bool:
+        if not self.flag and self._tty:
+            import select
+
+            if select.select([sys.stdin], [], [], 0)[0]:
+                sys.stdin.readline()
+                self.flag = True
+        return self.flag
+
+    def clear(self) -> None:
+        self.flag = False
+
+
+def replay(env, name, states, acts, start, recorded_success, skip=None) -> dict:
     env.reset()
     note = start(env) or ""
     trace = []
@@ -343,7 +378,14 @@ def replay(env, name, states, acts, start, recorded_success) -> dict:
     closes = [t for t in range(T) if acts[t, 9] > 0 and (t == 0 or acts[t - 1, 9] <= 0)]
     checks = {c + args.carry: (name, slot) for c, (name, slot) in zip(closes, GRASPS) if c + args.carry < T}
     grasps = []
+    skipped = None
+    if skip is not None:
+        skip.clear()
     for t in range(T + args.hold):
+        if skip is not None and skip.requested():
+            skipped = t
+            print(f"[replay]   skipped by you at step {t}", flush=True)
+            break
         a = torch.tensor(acts[min(t, T - 1)], device=env.device, dtype=torch.float32).reshape(1, -1)
         env.step(a)
         if first is None and bool(tracker(env).all_assembled()[0]):
@@ -363,18 +405,18 @@ def replay(env, name, states, acts, start, recorded_success) -> dict:
     o = obs(env)
     parts_now = o[SL["parts_poses"]].reshape(-1, 9)[:, :3]
     parts_demo = states[-1][SL["parts_poses"]].reshape(-1, 9)[:, :3]
-    e = np.array(errs)
+    e = np.array(errs) if errs else np.zeros((1, 2))  # skipped before the first step
     if args.save:
         out = Path(args.save).expanduser()
         out.mkdir(parents=True, exist_ok=True)
-        meta = {"name": name, "note": note, "grasps": grasps, "success": first is not None, "at": first,
+        meta = {"name": name, "note": note, "grasps": grasps, "success": first is not None, "at": first, "skipped_at": skipped,
                 "steps": T, "task": args.task, "source": args.zarr or args.demos}
         path = out / (name.replace(" ", "_") + ".npz")
         save_trace(path, name, states, acts, trace, start_obs, start_robot, meta, env)
         print(f"[replay]   trace: {path}", flush=True)
     return {
         "name": name,
-        "note": "; ".join(x for x in (note, *grasps) if x),
+        "note": "; ".join(x for x in (note, *grasps, f"skipped at step {skipped}" if skipped is not None else "") if x),
         "steps": T,
         "demo_success": recorded_success,
         "success": first is not None,
@@ -413,10 +455,12 @@ def main() -> None:
         raise SystemExit(f"{args.task} observation is {width} wide, expected the FBAbs {_s}")
     print(f"[replay] {args.zarr or args.demos} in {args.task}, success_mode={cfg.furniture.success_mode}", flush=True)
 
+    skip = Skip()
+    print("[replay] to end a replay early: N in the viewer window, or Enter in this terminal", flush=True)
     rows = []
     for i, (name, states, acts, start, rec) in enumerate(episodes):
         print(f"[replay] {i + 1}: {name}", flush=True)
-        r = replay(env, name, states, acts, start, rec)
+        r = replay(env, name, states, acts, start, rec, skip)
         rows.append(r)
         print(
             f"[replay] {r['name']}: {'SUCCESS at step ' + str(r['at']) if r['success'] else 'FAIL'} "
