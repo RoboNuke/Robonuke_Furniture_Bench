@@ -116,3 +116,28 @@ def test_resip_unscale_rotation_fails_without_a_plateau():
     ee, tgt, _, _ = _resip_episode(np.random.default_rng(2), n_sat=1)
     with pytest.raises(ValueError, match="not recoverable"):
         demos.resip_unscale_rotation(ee, tgt)
+
+
+def test_obstacle_tag_rot6d_is_the_front_obstacle_in_the_tag_frame():
+    o = demos.obstacle_tag_rot6d(frames.OBSTACLE_FRONT_POS)
+    want = frames.TAG_ROT_W.T @ (np.asarray(frames.OBSTACLE_FRONT_POS) - np.asarray(frames.TAG_POS_W))
+    np.testing.assert_allclose(o[:3], want, atol=1e-6)
+    np.testing.assert_allclose(demos.rot6d_to_mat(o[3:9]), frames.TAG_ROT_W.T, atol=1e-6)
+
+
+def test_fb_abs_frames_appends_the_recorded_obstacle(tmp_path):
+    path = tmp_path / "d.pkl"
+    _fake_pkl(path, T=3)
+    data = pickle.load(open(path, "rb"))
+    for o in data["observations"]:  # the fake pkl's state has no velocities
+        o["robot_state"].setdefault("ee_pos_vel", np.zeros(3, np.float32))
+        o["robot_state"].setdefault("ee_ori_vel", np.zeros(3, np.float32))
+    s61, _ = demos.fb_abs_frames(data)
+    old, _ = demos.fb_abs_frames(data, obstacle=True)  # no obstacles_robot: the fixed pose
+    assert s61.shape[1] == 61 and old.shape[1] == 70
+    np.testing.assert_allclose(old[:, :61], s61)
+    np.testing.assert_allclose(old[0, 61:], demos.obstacle_tag_rot6d(frames.OBSTACLE_FRONT_POS))
+    moved = np.asarray(frames.OBSTACLE_FRONT_POS) + np.array([0.01, -0.02, 0.0])
+    data["obstacles_robot"] = {"obstacle_front": moved}
+    new, _ = demos.fb_abs_frames(data, obstacle=True)
+    np.testing.assert_allclose(new[-1, 61:], demos.obstacle_tag_rot6d(moved))

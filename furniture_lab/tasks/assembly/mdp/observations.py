@@ -145,3 +145,22 @@ def ee_wrench(env: "ManagerBasedRLEnv") -> torch.Tensor:
     """The external EE wrench estimated from the joint torques (``assembly/wrench.py``),
     filtered, base frame: force then torque, (N, 6). Not in any group by default."""
     return env.wrench.filtered
+
+
+def obstacle_pose_tag_rot6d(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """The front obstacle's pose in the AprilTag frame as ``[pos 3, rot6d 6]``, ``(N, 9)``: what
+    ResiP's policies observe after the five parts (its ``parts_poses`` is 42 wide, the front
+    obstacle appended), here in the parts' rot6d form. It moves with ``furniture.obstacle_offset``."""
+    from ...furniture import frames
+    from .rot6d import quat_to_rot6d
+
+    robot = env.scene["robot"]
+    obstacle = env.scene["obstacle_front"]
+    pos_b, quat_b = subtract_frame_transforms(
+        robot.data.root_pos_w, robot.data.root_quat_w, obstacle.data.root_pos_w, obstacle.data.root_quat_w
+    )
+    N, device, dtype = pos_b.shape[0], pos_b.device, pos_b.dtype
+    tag_pos = torch.tensor(frames.TAG_POS_W, device=device, dtype=dtype).expand(N, -1)
+    tag_quat = torch.tensor(frames.mat_to_quat_wxyz(frames.TAG_ROT_W), device=device, dtype=dtype).expand(N, -1)
+    pos_t, quat_t = subtract_frame_transforms(tag_pos, tag_quat, pos_b, quat_b)
+    return torch.cat([pos_t, quat_to_rot6d(canonical_quat(quat_t))], dim=-1)

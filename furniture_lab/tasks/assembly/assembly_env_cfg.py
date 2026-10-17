@@ -413,6 +413,16 @@ FBABS_OBS_LAYOUT = (("ee_pos", 3), ("ee_rot6d", 6), ("ee_pos_vel", 3), ("ee_ori_
 FBABS_OBS_DIM = sum(w for _, w in FBABS_OBS_LAYOUT)
 #: ``[goal_pos 3 (base frame), goal_rot6d 6, gripper]``
 FBABS_ACTION_DIM = 10
+#: the ResiP ``-FBAbs-ResiP-v0`` observation: ``FBABS_OBS_LAYOUT`` then the front obstacle's
+#: tag-frame ``[pos 3, rot6d 6]`` (ResiP's policies observe it; it moves per episode there), 70
+FBABS_RESIP_OBS_LAYOUT = FBABS_OBS_LAYOUT + (("obstacle_pose", 9),)
+
+
+def fbabs_obs_layout(env_cfg) -> tuple:
+    """The ``-FBAbs-`` observation layout of ``env_cfg``: with the obstacle term when its policy
+    group has one (the ResiP task), else ``FBABS_OBS_LAYOUT``."""
+    policy = getattr(getattr(env_cfg, "observations", None), "policy", None)
+    return FBABS_RESIP_OBS_LAYOUT if getattr(policy, "obstacle_pose", None) is not None else FBABS_OBS_LAYOUT
 
 
 def abs_arm_cfg() -> OperationalSpaceControllerActionCfg:
@@ -443,6 +453,17 @@ class FBAbsObservationsCfg:
         def __post_init__(self):
             self.enable_corruption = False
             self.concatenate_terms = True
+
+    policy: PolicyCfg = PolicyCfg()
+
+
+@configclass
+class FBAbsResiPObservationsCfg:
+    """``FBAbsObservationsCfg`` plus the front obstacle's pose (``FBABS_RESIP_OBS_LAYOUT``, 70)."""
+
+    @configclass
+    class PolicyCfg(FBAbsObservationsCfg.PolicyCfg):
+        obstacle_pose = ObsTerm(func=mdp.obstacle_pose_tag_rot6d)
 
     policy: PolicyCfg = PolicyCfg()
 
@@ -542,7 +563,10 @@ class OneLegFBResiPEnvCfg(OneLegFBEnvCfg):
 
 @configclass
 class OneLegFBAbsResiPEnvCfg(OneLegFBAbsEnvCfg):
-    """ResiP's interface (absolute rot6d targets, rot6d observation) in ResiP's sim."""
+    """ResiP's interface (absolute rot6d targets, rot6d observation with the front obstacle's
+    pose: 70) in ResiP's sim."""
+
+    observations: FBAbsResiPObservationsCfg = FBAbsResiPObservationsCfg()
 
     def __post_init__(self):
         super().__post_init__()

@@ -89,10 +89,11 @@ from furniture_lab.demos import (  # noqa: E402
     load_demo,
     mat_to_rot6d,
     quat_to_mat,
+    obstacle_tag_rot6d,
     quat_xyzw_to_wxyz,
     resip_unscale_rotation,
 )
-from furniture_lab.tasks.assembly.assembly_env_cfg import FBABS_OBS_LAYOUT  # noqa: E402
+from furniture_lab.tasks.assembly.assembly_env_cfg import FBABS_OBS_LAYOUT, fbabs_obs_layout  # noqa: E402
 from furniture_lab.tasks.assembly.mdp.rot6d import rot6d_to_quat  # noqa: E402
 from furniture_lab.tasks.assembly.mdp.state import tracker  # noqa: E402
 from furniture_lab.tasks.furniture.square_table import MESH_FRAMES, PART_NAMES, mesh_frame  # noqa: E402
@@ -107,6 +108,9 @@ SL, _s = {}, 0
 for _name, _w in FBABS_OBS_LAYOUT:
     SL[_name] = slice(_s, _s + _w)
     _s += _w
+#: the task observes the front obstacle's pose after the parts (the ResiP task: 70 wide); set
+#: in main() from the task's cfg, before the episodes are read
+OBSTACLE_OBS = False
 
 
 # ------------------------------------------------------------------------------ the episodes
@@ -122,7 +126,7 @@ def pkl_episodes(root: Path):
         demo = load_demo(path)
         with open(path, "rb") as f:
             data = pickle.load(f)
-        states, acts = fb_abs_frames(data)
+        states, acts = fb_abs_frames(data, obstacle=OBSTACLE_OBS)
         # demos recorded with moving obstacles (furniture.obstacle_offset) carry where they were
         obstacles = data.get("obstacles_robot")
 
@@ -141,6 +145,15 @@ def zarr_states_abs(robot_state: np.ndarray, parts: np.ndarray) -> np.ndarray:
     p = parts.reshape(T, 5, 7)
     rot = np.stack([[mat_to_rot6d(quat_to_mat(quat_xyzw_to_wxyz(p[t, i, 3:7]))) for i in range(5)] for t in range(T)])
     return np.concatenate([robot_state, np.concatenate([p[:, :, :3], rot], axis=-1).reshape(T, 45)], axis=-1).astype(np.float32)
+
+
+def _obstacle_states(front_tag, T: int) -> np.ndarray:
+    """(T, 9) ``obstacle_pose`` rows: the recorded tag-frame front-obstacle positions (or this
+    scene's fixed one for ``None``) as ``demos.obstacle_tag_rot6d`` gives them."""
+    if front_tag is None:
+        return np.tile(obstacle_tag_rot6d(OBSTACLE_FRONT_POS), (T, 1))
+    robot = np.asarray(TAG_POS_W) + np.asarray(front_tag, dtype=np.float64) @ TAG_ROT_W.T
+    return np.stack([obstacle_tag_rot6d(p) for p in robot])
 
 
 def check_obstacle(recorded_tag: np.ndarray) -> None:
@@ -189,6 +202,9 @@ def zarr_episodes(path: Path):
             break
         n += 1
         states = zarr_states_abs(robot_state[lo:hi], parts[lo:hi])
+        if OBSTACLE_OBS:  # the recorded position; the rotation is this scene's (a constant)
+            front_tag = obstacles[lo:hi] if obstacles is not None else None
+            states = np.concatenate([states, _obstacle_states(front_tag, hi - lo)], axis=1)
         acts = actions[lo:hi].copy()
         # ResiP's processing shrank the episode's rotation deltas by one factor (demos.py)
         if not args.no_rot_rescale:
@@ -452,8 +468,12 @@ def replay(env, name, states, acts, start, recorded_success, skip=None) -> dict:
 
 
 def main() -> None:
+    global OBSTACLE_OBS, _s
     episodes = zarr_episodes(Path(args.zarr).expanduser()) if args.zarr else pkl_episodes(Path(args.demos).expanduser())
     cfg = load_cfg_from_registry(args.task, "env_cfg_entry_point")
+    layout = fbabs_obs_layout(cfg)
+    OBSTACLE_OBS = any(name == "obstacle_pose" for name, _ in layout)
+    _s = sum(w for _, w in layout)
     cfg.scene.num_envs = 1
     cfg.episode_length_s = 1e6
     cfg.terminations.success = None  # success read from the tracker, the replay keeps going

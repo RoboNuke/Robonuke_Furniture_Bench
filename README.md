@@ -146,7 +146,10 @@ the arm on differential IK (least squares) into joint PD 1000 / 200 instead of t
 FB action terms' gripper hysteresis (`furniture.gripper_margin` 0.019: the command flips only on a
 clear sign change), the three obstacles moved together at every reset by a uniform (x, y)
 offset of up to ±2 cm (`furniture.obstacle_offset` 0.02, ResiP's low randomness; 0 elsewhere,
-i.e. the fixed poses), and 70 s episodes (their 700-step cap). The demo collector reads where
+i.e. the fixed poses), and 70 s episodes (their 700-step cap). `-FBAbs-ResiP-v0` also
+observes the front obstacle's pose after the parts, as ResiP's policies do (their
+`parts_poses` is 42 wide): `obstacle_pose`, tag-frame `[pos 3, rot6d 6]`, so the observation
+is 70 (`FBABS_RESIP_OBS_LAYOUT`; `fbabs_obs_layout(cfg)` picks the layout of a cfg). The demo collector reads where
 the obstacles are each episode, so the top is pushed into that episode's corner, and saves
 their positions in the pkl (`obstacles_robot`); `replay_abs.py` puts them back (a pkl without
 them was recorded with the obstacles at their fixed poses, and replays there). Demos for them:

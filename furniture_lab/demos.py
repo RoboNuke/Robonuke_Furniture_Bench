@@ -35,7 +35,7 @@ from .tasks.furniture.square_table import MESH_FRAMES, PART_NAMES, mesh_frame
 
 __all__ = [
     "Demo", "load_demo", "quat_xyzw_to_wxyz", "quat_to_mat", "mat_to_quat",
-    "mat_to_rot6d", "rot6d_to_mat", "resip_unscale_rotation", "FB_STATE_KEYS", "fb_state", "fb_abs_state", "fb_abs_action", "fb_abs_frames",
+    "mat_to_rot6d", "rot6d_to_mat", "resip_unscale_rotation", "FB_STATE_KEYS", "fb_state", "fb_abs_state", "fb_abs_action", "fb_abs_frames", "obstacle_tag_rot6d",
 ]
 
 #: FurnitureBench's DEFAULT_STATE_OBS keys of ``robot_state``, in order (then ``parts_poses``)
@@ -220,14 +220,30 @@ def fb_abs_action(obs: Dict[str, Any], action: Any) -> np.ndarray:
     return np.concatenate([goal_pos, mat_to_rot6d(R_goal), a[7:8]]).astype(np.float32)
 
 
-def fb_abs_frames(data: Dict[str, Any]) -> tuple:
+def obstacle_tag_rot6d(front_pos_robot: Any) -> np.ndarray:
+    """The front obstacle at ``front_pos_robot`` (robot-base frame; the box is never rotated)
+    -> its tag-frame ``[pos 3, rot6d 6]`` (9): the ``obstacle_pose`` observation of the ResiP
+    task (``mdp.obstacle_pose_tag_rot6d``'s NumPy twin)."""
+    R_t = frames.TAG_ROT_W.T
+    pos_t = R_t @ (np.asarray(front_pos_robot, dtype=np.float64) - np.asarray(frames.TAG_POS_W))
+    return np.concatenate([pos_t, mat_to_rot6d(R_t)]).astype(np.float32)
+
+
+def fb_abs_frames(data: Dict[str, Any], obstacle: bool = False) -> tuple:
     """A loaded pkl -> ``(states (T+1, 61), actions (T, 10))`` of the ``-FBAbs-v0`` interface
-    (the last observation is repeated when the pkl holds none after the last action)."""
+    (the last observation is repeated when the pkl holds none after the last action).
+
+    ``obstacle``: append the front obstacle's pose (``obstacle_tag_rot6d``) to every state, 70
+    wide (the ResiP task's layout), from the pkl's ``obstacles_robot`` -- or, for a pkl recorded
+    before the obstacles moved, their fixed pose ``frames.OBSTACLE_FRONT_POS``."""
     obs, acts = data["observations"], data["actions"]
     T = len(acts)
     states = np.stack([fb_abs_state(o) for o in obs[: T + 1]])
     if states.shape[0] == T:
         states = np.concatenate([states, states[-1:]])
+    if obstacle:
+        front = (data.get("obstacles_robot") or {}).get("obstacle_front", frames.OBSTACLE_FRONT_POS)
+        states = np.concatenate([states, np.tile(obstacle_tag_rot6d(front), (states.shape[0], 1))], axis=1)
     actions = np.stack([fb_abs_action(obs[t], acts[t]) for t in range(T)])
     return states, actions
 
