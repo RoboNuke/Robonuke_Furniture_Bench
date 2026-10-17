@@ -65,6 +65,12 @@ parser.add_argument(
     "--save", default=None, metavar="DIR",
     help="write one .npz per demo with the per-step data, this env and the demo side by side (see save_trace)",
 )
+# isolating the ResiP gripper emulation and the zarr rotation rescale (defaults: the task's / on)
+parser.add_argument("--grip_stiffness", type=float, default=None, help="finger drive N/m (ResiP task: 10000; old 600)")
+parser.add_argument("--grip_damping", type=float, default=None, help="finger drive N s/m (ResiP task: 10; old 40)")
+parser.add_argument("--grip_force", type=float, default=None, help="finger effort cap N (ResiP task: 13)")
+parser.add_argument("--grip_speed", type=float, default=None, help="finger speed cap m/s (ResiP task: 0.057); 0 = no cap")
+parser.add_argument("--no_rot_rescale", action="store_true", help="zarr: keep ResiP's shrunk rotation deltas as stored")
 parser.add_argument("--print_every", type=int, default=50, help="per-step EE error lines (0: off)")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
@@ -175,8 +181,9 @@ def zarr_episodes(path: Path):
         states = zarr_states_abs(robot_state[lo:hi], parts[lo:hi])
         acts = actions[lo:hi].copy()
         # ResiP's processing shrank the episode's rotation deltas by one factor (demos.py)
-        acts[:, 3:9], f = resip_unscale_rotation(robot_state[lo:hi, 3:9], acts[:, 3:9])
-        print(f"[replay] episode {e}: rotation deltas scaled back up by {f:.3f}", flush=True)
+        if not args.no_rot_rescale:
+            acts[:, 3:9], f = resip_unscale_rotation(robot_state[lo:hi, 3:9], acts[:, 3:9])
+            print(f"[replay] episode {e}: rotation deltas scaled back up by {f:.3f}", flush=True)
         states = np.concatenate([states, states[-1:]])  # no observation after the last action
         first = dict(
             ee=states[0, 0:9], width=float(robot_state[lo, 15]), parts=parts[lo], grip=float(actions[lo, 9]),
@@ -386,6 +393,19 @@ def main() -> None:
     cfg.episode_length_s = 1e6
     cfg.terminations.success = None  # success read from the tracker, the replay keeps going
     cfg.terminations.part_out_of_limits = None
+    f = cfg.furniture
+    for name, value in (("gripper_stiffness", args.grip_stiffness), ("gripper_damping", args.grip_damping),
+                        ("gripper_effort_limit", args.grip_force)):
+        if value is not None:
+            setattr(f, name, value)
+    if args.grip_speed is not None:
+        f.gripper_velocity_limit = args.grip_speed or None
+    cfg.apply_gripper()
+    if args.grip_speed == 0:
+        cfg.scene.robot.actuators["panda_hand"].velocity_limit_sim = None  # the asset's own
+    hand = cfg.scene.robot.actuators["panda_hand"]
+    print(f"[replay] fingers: stiffness {hand.stiffness}, damping {hand.damping}, effort {hand.effort_limit_sim}, "
+          f"speed cap {hand.velocity_limit_sim}; zarr rotation rescale {'off' if args.no_rot_rescale else 'on'}", flush=True)
     env = gym.make(args.task, cfg=cfg).unwrapped
     env.reset()
     width = int(env.single_observation_space["policy"].shape[-1])
