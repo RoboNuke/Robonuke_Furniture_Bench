@@ -82,7 +82,7 @@ def test_observation_terms_name_their_bodies(cfg_module):
 def test_reset_events_run_in_order(cfg_module):
     events = cfg_module.OneLegEnvCfg().events
     names = [k for k, v in vars(events).items() if getattr(v, "mode", None) == "reset"]
-    assert names == ["reset_scene", "reset_parts", "reset_assembly"]
+    assert names == ["reset_scene", "reset_obstacles", "reset_parts", "reset_assembly"]
     assert events.reset_parts.params == {"pos_range": 0.015, "yaw_range_deg": 15.0, "max_tries": 20}
     startup = [v for v in vars(events).values() if getattr(v, "mode", None) == "startup"]
     friction = [v for v in startup if "static_friction_range" in v.params]
@@ -233,13 +233,15 @@ def test_resip_sim_cfgs(cfg_module):
         assert cfg.scene.robot.actuators["panda_forearm"].damping == 200.0
         f = cfg.furniture
         assert (f.part_friction, f.table_friction, f.gripper_effort_limit, f.gripper_margin) == (0.15, 0.10, 13.0, 0.019)
-        assert f.gripper_velocity_limit == 0.057 and cfg.scene.robot.actuators["panda_hand"].velocity_limit_sim == 0.057
-        assert cfg.scene.robot.actuators["panda_hand"].stiffness == 10000.0
+        assert f.obstacle_offset == 0.02 and cfg.events.reset_obstacles is not None
+        assert f.gripper_velocity_limit == 0.2 and cfg.scene.robot.actuators["panda_hand"].velocity_limit_sim == 0.2
+        assert cfg.scene.robot.actuators["panda_hand"].stiffness == 600.0 and cfg.scene.robot.actuators["panda_hand"].damping == 40.0
         arm = cfg.actions.fb.arm if hasattr(cfg.actions, "fb") else cfg.actions.arm
         assert arm.controller.use_relative_mode is (not absolute) and arm.controller.ik_method == "pinv"
         assert arm.body_offset.pos == cfg_module.EE_OFFSET
     # the port's cfgs are untouched
     port = cfg_module.OneLegFBAbsEnvCfg()
+    assert port.furniture.obstacle_offset == 0.0
     assert port.decimation == 6 and port.scene.robot.actuators["panda_shoulder"].stiffness == 0.0
 
 

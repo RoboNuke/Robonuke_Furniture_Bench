@@ -116,6 +116,10 @@ class FurnitureCfg:
     #: once it has tested assembled ``success_hold_steps`` consecutive steps with the fingers
     #: open wider than ``success_release_width`` (m) and the TCP farther than
     #: ``success_clearance`` (m) from the inserted part.
+    #: m: at every reset the three obstacles move together by one uniform (x, y) offset in
+    #: [-r, r] (ResiP's FurnitureRLSimEnv, low randomness: 0.02; ``apply_resip`` sets it).
+    #: 0 keeps them at ``frames``' fixed poses
+    obstacle_offset: float = 0.0
     success_mode: str = "soft"
     success_hold_steps: int = 10
     success_release_width: float = 0.05
@@ -138,8 +142,7 @@ class FurnitureCfg:
     gripper_damping: float = 40.0
     gripper_effort_limit: float = 30.0  # N per finger
     #: max finger joint speed (m/s per finger; PhysX max joint velocity), None = the asset's.
-    #: ResiP's effort-mode fingers (13 N against DOF friction 15) close at a steady ~57 mm/s
-    #: per finger (11.4 mm of width per 10 Hz step in their teleop demos)
+    #: (ResiP's effort-mode fingers -- 13 N against DOF friction 15 -- close at ~0.057 m/s)
     gripper_velocity_limit: Optional[float] = None
     #: the FB action terms' gripper hysteresis: the command flips only when the action's sign
     #: changes and its size exceeds this (ResiP / FurnitureRLSimEnv's grasp_margin, 0.019);
@@ -256,9 +259,12 @@ class EventCfg:
     leg3_friction = _friction_event("square_table_leg3", PART_FRICTION)
     leg4_friction = _friction_event("square_table_leg4", PART_FRICTION)
 
-    # -- reset, in this order: everything to its default, then the parts perturbed, then
+    # -- reset, in this order: everything to its default, then the obstacles offset and the
+    #    parts perturbed, then
     #    the assembly latch cleared
     reset_scene = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
+    # the three obstacles moved together by up to furniture.obstacle_offset (0: not at all)
+    reset_obstacles = EventTerm(func=mdp.randomize_obstacles, mode="reset")
     reset_parts = EventTerm(
         func=mdp.randomize_parts_pose,
         mode="reset",
@@ -460,15 +466,16 @@ class OneLegFBAbsEnvCfg(OneLegEnvCfg):
 # --------------------------------------------- ResiP's sim (FurnitureRLSimEnv), for the demos
 #: what ResiP's BC and RL ran in (``furniture_bench/envs/furniture_rl_sim_env.py`` of their
 #: fork): 10 Hz policy (dt 1/60 x 6 there; 1/120 x 12 here, the same 0.1 s with this port's
-#: physics step), the arm on differential IK into stiff joint PD (1000 / 200), the fingers
-#: at a constant 13 N closing at ~57 mm/s (their effort mode, emulated), friction 0.15 parts / 0.10 table (FurnitureSim's), and the gripper
+#: physics step), the arm on differential IK into stiff joint PD (1000 / 200), the finger
+#: drive 600 N/m capped at 13 N (speed limit 0.2 m/s), the obstacles moved +-2 cm per reset, friction 0.15 parts / 0.10 table (FurnitureSim's), and the gripper
 #: hysteresis. Episodes 70 s (their 700-step rollout cap at 10 Hz).
 RESIP_DECIMATION = 12
 RESIP_ARM_STIFFNESS = 1000.0
 RESIP_ARM_DAMPING = 200.0
-#: the effort-mode gripper emulation (``apply_resip``): N/m, and m/s per finger
-RESIP_GRIPPER_STIFFNESS = 10000.0
-RESIP_GRIPPER_SPEED = 0.057
+#: ResiP's obstacle randomization at low randomness (m, uniform +- in x and y, all three together)
+RESIP_OBSTACLE_OFFSET = 0.02
+#: the finger speed limit (m/s per finger) of ``apply_resip``
+RESIP_GRIPPER_SPEED = 0.2
 
 
 def dik_arm_cfg(absolute: bool) -> DifferentialInverseKinematicsActionCfg:
@@ -497,14 +504,15 @@ def apply_resip(cfg) -> None:
         cfg.scene.robot.actuators[group].damping = RESIP_ARM_DAMPING
     f = cfg.furniture
     f.part_friction, f.table_friction = 0.15, 0.10
-    # ResiP's fingers are effort mode: a constant 13 N per finger against DOF friction 15, so
-    # they close at a steady ~57 mm/s and squeeze 13 N on whatever they hold. Emulated by a
-    # drive stiff enough to sit at its 13 N cap until within 1.3 mm of the target, and the
-    # finger speed capped at the speed their demos show (the old 600 N/m drive snapped shut in
-    # 1-2 steps and knocked the leg 6-18 mm at the grasp; theirs takes 6-8 steps)
-    f.gripper_stiffness, f.gripper_damping, f.gripper_effort_limit = RESIP_GRIPPER_STIFFNESS, 10.0, 13.0
+    # finger drive capped at ResiP's 13 N; 600 N/m (as the port: a stiffer drive pushed the
+    # fingers into the leg), ~9 N squeeze on a 30 mm leg, and a 0.2 m/s
+    # finger speed limit. ResiP's own fingers are effort mode (13 N against DOF friction 15,
+    # ~0.057 m/s); an emulation of that (10000 N/m, speed capped at 0.057) dropped the leg in
+    # the replays, so this is the setting the port's demos are recorded with
+    f.gripper_stiffness, f.gripper_damping, f.gripper_effort_limit = 600.0, 40.0, 13.0
     f.gripper_velocity_limit = RESIP_GRIPPER_SPEED
     f.gripper_margin = 0.019
+    f.obstacle_offset = RESIP_OBSTACLE_OFFSET
     cfg.apply_friction()
     cfg.apply_gripper()
     fb = getattr(cfg.actions, "fb", None)

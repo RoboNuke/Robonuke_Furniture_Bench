@@ -66,10 +66,10 @@ parser.add_argument(
     help="write one .npz per demo with the per-step data, this env and the demo side by side (see save_trace)",
 )
 # isolating the ResiP gripper emulation and the zarr rotation rescale (defaults: the task's / on)
-parser.add_argument("--grip_stiffness", type=float, default=None, help="finger drive N/m (ResiP task: 10000; old 600)")
+parser.add_argument("--grip_stiffness", type=float, default=None, help="finger drive N/m (ResiP task: 600)")
 parser.add_argument("--grip_damping", type=float, default=None, help="finger drive N s/m (ResiP task: 10; old 40)")
 parser.add_argument("--grip_force", type=float, default=None, help="finger effort cap N (ResiP task: 13)")
-parser.add_argument("--grip_speed", type=float, default=None, help="finger speed cap m/s (ResiP task: 0.057); 0 = no cap")
+parser.add_argument("--grip_speed", type=float, default=None, help="finger speed cap m/s (ResiP task: 0.2); 0 = the asset default")
 parser.add_argument("--no_rot_rescale", action="store_true", help="zarr: keep ResiP's shrunk rotation deltas as stored")
 parser.add_argument("--print_every", type=int, default=50, help="per-step EE error lines (0: off)")
 AppLauncher.add_app_launcher_args(parser)
@@ -121,8 +121,18 @@ def pkl_episodes(root: Path):
     for path in paths[: args.max_demos] if args.max_demos else paths:
         demo = load_demo(path)
         with open(path, "rb") as f:
-            states, acts = fb_abs_frames(pickle.load(f))
-        yield path.name, states, acts, (lambda env, demo=demo: set_state_exact(env, demo, 0)), demo.success
+            data = pickle.load(f)
+        states, acts = fb_abs_frames(data)
+        # demos recorded with moving obstacles (furniture.obstacle_offset) carry where they were
+        obstacles = data.get("obstacles_robot")
+
+        def start(env, demo=demo, obstacles=obstacles):
+            # before the parts settle: a pkl from before the obstacles moved had them at
+            # their fixed default poses, so those go back there
+            _write_obstacles_robot(env, obstacles)
+            return set_state_exact(env, demo, 0)
+
+        yield path.name, states, acts, start, demo.success
 
 
 def zarr_states_abs(robot_state: np.ndarray, parts: np.ndarray) -> np.ndarray:
@@ -234,6 +244,19 @@ def _write_obstacles(env, front_tag: np.ndarray) -> None:
         pose = torch.tensor([[*pos, 1.0, 0.0, 0.0, 0.0]], device=env.device, dtype=torch.float32)
         pose[:, :3] += origin
         env.scene[name].write_root_pose_to_sim(pose)
+
+
+def _write_obstacles_robot(env, obstacles) -> None:
+    """The three obstacles at a pkl's recorded robot-base-frame positions (``obstacles_robot``),
+    or, for ``None`` (a pkl recorded before they moved), at their default poses."""
+    origin = env.scene.env_origins[:1]
+    for name in ("obstacle_front", "obstacle_right", "obstacle_left"):
+        asset = env.scene[name]
+        pose = asset.data.default_root_state[:1, :7].clone()
+        if obstacles is not None:
+            pose[:, :3] = torch.tensor(np.asarray(obstacles[name], dtype=np.float64), device=env.device, dtype=pose.dtype)
+        pose[:, :3] += origin
+        asset.write_root_pose_to_sim(pose)
 
 
 def set_state_ik(env, ee: np.ndarray, width: float, parts: np.ndarray, grip: float, obstacle_tag=None) -> str:

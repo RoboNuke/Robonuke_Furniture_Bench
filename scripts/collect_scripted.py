@@ -240,8 +240,11 @@ def read_state(env, part_names, mesh_frame: str):
         q_tag = sp.mat_to_quat(T_tag[:3, :3])
         parts_flat.append(np.concatenate([T_tag[:3, 3], [q_tag[1], q_tag[2], q_tag[3], q_tag[0]]]))
 
-    obstacles = {"obstacle_front": np.array(frames.OBSTACLE_FRONT_POS)}
-    obstacles.update({k: np.array(v) for k, v in frames.OBSTACLE_SIDE_POS.items()})
+    # where the obstacles are this episode (furniture.obstacle_offset moves them at reset)
+    obstacles = {
+        k: env.scene[k].data.root_pos_w[0].cpu().numpy().astype(np.float64) - origin
+        for k in ("obstacle_front", "obstacle_right", "obstacle_left")
+    }
     state = sp.ScriptedState(
         ee_pos, sp.quat_to_mat(ee_quat), width, parts_tag, obstacles, robot.data.joint_pos[0, arm].cpu().numpy().astype(np.float64)
     )
@@ -427,6 +430,12 @@ def main() -> None:
             "skills": skills,
             "success": success,
             "furniture": "one_leg",
+            # robot-base frame positions of the three obstacles this episode (kinematic: fixed
+            # from the reset on), so a replay can put them back
+            "obstacles_robot": {
+                k: (env.scene[k].data.root_pos_w[0] - env.scene.env_origins[0]).cpu().numpy().astype(np.float64)
+                for k in ("obstacle_front", "obstacle_right", "obstacle_left")
+            },
             "error": aborted or out_of_limits,
             "error_description": "failed by key" if aborted else ("part out of position limits" if out_of_limits else ""),
         }

@@ -284,8 +284,9 @@ class ServoOneLegPolicy:
         """The top against the front and left obstacles (``corner_clearance`` < 0 puts the goal
         inside the walls, so it is pushed into contact and squared by them), at its nominal
         reset yaw (upstream's reset orientation, without the reset noise)."""
-        x = frames.OBSTACLE_FRONT_POS[0] - frames.OBSTACLE_FRONT_SIZE[0] / 2 - self.TOP_HALF_WIDTH - self.corner_clearance
-        y = frames.OBSTACLE_SIDE_POS["obstacle_left"][1] - frames.OBSTACLE_SIDE_SIZE[1] / 2 - self.TOP_HALF_WIDTH - self.corner_clearance
+        # the obstacles where they are this episode (moved by furniture.obstacle_offset)
+        x = s.obstacles_robot["obstacle_front"][0] - frames.OBSTACLE_FRONT_SIZE[0] / 2 - self.TOP_HALF_WIDTH - self.corner_clearance
+        y = s.obstacles_robot["obstacle_left"][1] - frames.OBSTACLE_SIDE_SIZE[1] / 2 - self.TOP_HALF_WIDTH - self.corner_clearance
         T_top, _, _ = self._poses(s)
         from .tasks.furniture.square_table import PARTS
 

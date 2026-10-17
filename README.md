@@ -142,9 +142,14 @@ the EE error against the demo. The success rate is the ceiling a perfect clone r
 `Isaac-Furniture-OneLeg-ResiP-v0`, `-FB-ResiP-v0` and `-FBAbs-ResiP-v0` are the three interfaces in
 ResiP's FurnitureRLSimEnv (`assembly_env_cfg.apply_resip`): a 10 Hz policy (1/120 s physics x 12),
 the arm on differential IK (least squares) into joint PD 1000 / 200 instead of the OSC, friction
-0.15 parts / 0.10 table, ResiP's effort-mode fingers emulated (a 10000 N/m drive capped at 13 N, so a constant 13 N squeeze, and the finger speed capped at 0.057 m/s: `furniture.gripper_velocity_limit`, the steady closing speed in their teleop demos), the
+0.15 parts / 0.10 table, a 600 N/m finger drive capped at 13 N with a 0.2 m/s finger speed limit (`furniture.gripper_velocity_limit`; ResiP's 13 N; a stiffer drive pushed the fingers into the leg, and an emulation of ResiP's slower effort-mode fingers dropped the leg), the
 FB action terms' gripper hysteresis (`furniture.gripper_margin` 0.019: the command flips only on a
-clear sign change), and 70 s episodes (their 700-step cap). Demos for them:
+clear sign change), the three obstacles moved together at every reset by a uniform (x, y)
+offset of up to ±2 cm (`furniture.obstacle_offset` 0.02, ResiP's low randomness; 0 elsewhere,
+i.e. the fixed poses), and 70 s episodes (their 700-step cap). The demo collector reads where
+the obstacles are each episode, so the top is pushed into that episode's corner, and saves
+their positions in the pkl (`obstacles_robot`); `replay_abs.py` puts them back (a pkl without
+them was recorded with the obstacles at their fixed poses, and replays there). Demos for them:
 
 ```bash
 python scripts/collect_scripted.py --sim resip --out_dir ~/Robonuke_Furniture_Bench/demos_resip --num_demos 50

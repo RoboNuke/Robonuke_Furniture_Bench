@@ -1,4 +1,5 @@
-"""Reset events: FurnitureBench's part-pose randomization, and clearing the assembly latch.
+"""Reset events: FurnitureBench's part-pose randomization, ResiP's obstacle offset, and clearing the
+assembly latch.
 
 Upstream (``Furniture.randomize_init_pose`` / ``Part.randomize_init_pose``) perturbs each
 part's reset pose by a uniform (x, y) offset and a uniform yaw about the table normal, then
@@ -101,6 +102,33 @@ def randomize_parts_pose(
         asset = env.scene[name]
         asset.write_root_pose_to_sim(torch.cat([pos[:, k], quat[:, k]], dim=-1), env_ids=env_ids)
         asset.write_root_velocity_to_sim(vel, env_ids=env_ids)
+
+
+#: the scene names of the three obstacles (``AssemblySceneCfg``)
+OBSTACLE_NAMES = ("obstacle_front", "obstacle_left", "obstacle_right")
+
+
+def randomize_obstacles(env: "ManagerBasedRLEnv", env_ids: torch.Tensor) -> None:
+    """Move the three obstacles together by one uniform (x, y) offset per env, in
+    ``[-r, r]`` with ``r = env.cfg.furniture.obstacle_offset`` (m; 0 leaves them at their
+    defaults), as ResiP's FurnitureRLSimEnv does (``_reset_part_poses``: one offset for all
+    three, z untouched; low randomness 0.02). Runs after ``reset_scene_to_default``; the field
+    is read at every reset, so a YAML override of it takes effect."""
+    r = float(env.cfg.furniture.obstacle_offset)
+    if r <= 0.0:
+        return
+    if env_ids is None:
+        env_ids = torch.arange(env.num_envs, device=env.device)
+    n = len(env_ids)
+    if n == 0:
+        return
+    offset = torch.zeros(n, 3, device=env.device)
+    offset[:, :2] = (torch.rand(n, 2, device=env.device) * 2 - 1) * r
+    for name in OBSTACLE_NAMES:
+        asset = env.scene[name]
+        default = asset.data.default_root_state[env_ids]
+        pos = default[:, :3] + env.scene.env_origins[env_ids] + offset
+        asset.write_root_pose_to_sim(torch.cat([pos, default[:, 3:7]], dim=-1), env_ids=env_ids)
 
 
 def reset_assembly_tracker(env: "ManagerBasedRLEnv", env_ids: torch.Tensor) -> None:

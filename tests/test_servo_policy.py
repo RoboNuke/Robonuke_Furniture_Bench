@@ -152,3 +152,14 @@ def test_object_servo_orbits_the_tcp_about_the_object():
     # a pure translation goal: passes straight through, saturated
     p, R, _, _ = servo.step(obj_pos, obj_R, obj_pos + np.array([0.05, 0, 0]), obj_R, ee_pos, ee_R)
     assert np.allclose(p - ee_pos, [0.01, 0, 0]) and np.allclose(R, ee_R)
+
+
+def test_corner_goal_follows_moved_obstacles():
+    """The top is pushed into wherever the obstacles are this episode (furniture.obstacle_offset)."""
+    w = IdealWorld()
+    pol = sv.ServoOneLegPolicy(seed=0)
+    goal0, _ = pol._corner_goal(w.state())
+    shift = np.array([0.013, -0.017, 0.0])
+    w.obst = {k: v + shift for k, v in w.obst.items()}
+    goal1, _ = pol._corner_goal(w.state())
+    np.testing.assert_allclose(goal1[:2] - goal0[:2], shift[:2], atol=1e-12)
