@@ -300,6 +300,10 @@ def _stages(a: Attempt, th: Thresholds) -> Dict[str, Any]:
                 out[f"screw_tz_p95_{tag}_Nm"] = float(np.percentile(tz[mask], 95))
         out["screw_fz_median_N"] = float(np.median(fz[held])) if held.any() else float(np.median(fz))
         out["fxy_peak_while_held"] = bool(held[int(np.argmax(fxy))])
+        # when that peak came: steps after the leg release, and steps before the window's end
+        # (for a failure: before the leg left its hole)
+        out["fxy_peak_after_release"] = int(np.argmax(fxy))
+        out["fxy_peak_before_end"] = int(n - 1 - np.argmax(fxy))
         # the last 10 steps before the window's end (the leg leaving its hole, for a failure)
         tail = slice(max(n - 10, 0), n)
         out["screw_fxy_last10_N"] = float(fxy[tail].max())

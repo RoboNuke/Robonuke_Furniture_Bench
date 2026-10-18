@@ -42,7 +42,7 @@ FORCES = (
     "lower_fz_peak_N", "lower_fz_end_N", "screw_fz_peak_N", "screw_fz_median_N", "screw_fxy_peak_N", "screw_tz_peak_Nm",
     "screw_fz_p95_held_N", "screw_fxy_p95_held_N", "screw_tz_p95_held_Nm",
     "screw_fz_p95_open_N", "screw_fxy_p95_open_N", "screw_tz_p95_open_Nm",
-    "screw_fz_last10_N", "screw_fxy_last10_N",
+    "screw_fz_last10_N", "screw_fxy_last10_N", "fxy_peak_after_release", "fxy_peak_before_end",
 )
 
 
@@ -66,7 +66,8 @@ def main() -> int:
         rows.append((path, r))
         shown = ", ".join(f"{k} {r[k]:.1f}" for k in METRICS + FORCES[:6] if k in r)
         if "fxy_peak_while_held" in r:
-            shown += f", fxy peak {'held' if r['fxy_peak_while_held'] else 'fingers OPEN'}"
+            shown += (f", fxy peak {'held' if r['fxy_peak_while_held'] else 'fingers OPEN'} "
+                      f"{r['fxy_peak_after_release']} steps after release, {r['fxy_peak_before_end']} before the end")
         at = f" at step {r['step']}" if r["step"] is not None else ""
         print(f"{path.relative_to(Path(args.dir).expanduser())}: {r['stage']}{at} ({r['steps']} steps; {shown})")
 
