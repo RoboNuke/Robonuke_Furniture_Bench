@@ -38,7 +38,12 @@ args = parser.parse_args()
 
 METRICS = ("corner_mm", "lift_mm", "insert_xz_mm", "insert_tilt_deg", "insert_height_mm", "top_move_mm", "top_yaw_deg", "final_height_mm")
 #: with the collector's ee_wrench recorded: the push-down while lowering and screwing
-FORCES = ("lower_fz_peak_N", "lower_fz_end_N", "screw_fz_peak_N", "screw_fz_median_N", "screw_fxy_peak_N", "screw_tz_peak_Nm")
+FORCES = (
+    "lower_fz_peak_N", "lower_fz_end_N", "screw_fz_peak_N", "screw_fz_median_N", "screw_fxy_peak_N", "screw_tz_peak_Nm",
+    "screw_fz_p95_held_N", "screw_fxy_p95_held_N", "screw_tz_p95_held_Nm",
+    "screw_fz_p95_open_N", "screw_fxy_p95_open_N", "screw_tz_p95_open_Nm",
+    "screw_fz_last10_N", "screw_fxy_last10_N",
+)
 
 
 def main() -> int:
@@ -59,7 +64,9 @@ def main() -> int:
             print(f"{path}: could not read ({type(exc).__name__}: {exc})")
             continue
         rows.append((path, r))
-        shown = ", ".join(f"{k} {r[k]:.1f}" for k in METRICS + FORCES if k in r)
+        shown = ", ".join(f"{k} {r[k]:.1f}" for k in METRICS + FORCES[:6] if k in r)
+        if "fxy_peak_while_held" in r:
+            shown += f", fxy peak {'held' if r['fxy_peak_while_held'] else 'fingers OPEN'}"
         at = f" at step {r['step']}" if r["step"] is not None else ""
         print(f"{path.relative_to(Path(args.dir).expanduser())}: {r['stage']}{at} ({r['steps']} steps; {shown})")
 
@@ -87,6 +94,10 @@ def main() -> int:
         stages = [st for st in STAGES if counts.get(st)]
         print("\nforces, median per stage (+z: the parts pushing back up on the hand):")
         print("  " + " " * 18 + "".join(f"{st.split(': ')[-1][:16]:>18s}" for st in stages))
+        held = [r["fxy_peak_while_held"] for _, r in rows if "fxy_peak_while_held" in r]
+        if held:
+            print(f"  (the screwing fxy peak came with the fingers open in {held.count(False)}/{len(held)} attempts: the "
+                  "arm's own effort, not contact -- read the _held rows)")
         for k in have:
             cells = []
             for st in stages:

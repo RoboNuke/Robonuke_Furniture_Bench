@@ -285,17 +285,25 @@ def _stages(a: Attempt, th: Thresholds) -> Dict[str, Any]:
         screw_steps=stop,
         screw_regrasps=len([c for c in closes if release < c <= release + stop]),
     )
-    if a.wrench is not None:  # the push on the thread while screwing, up to the window's end
+    if a.wrench is not None:  # the forces while screwing, up to the window's end
         w = a.wrench[release : release + stop + 1]
-        fz = w[:, 2]
-        held = closed[release : release + stop + 1] if release + stop + 1 <= T else closed[release:]
-        fz_held = fz[: len(held)][held] if held.any() else fz
-        out.update(
-            screw_fz_peak_N=float(fz.max()),
-            screw_fz_median_N=float(np.median(fz_held)),
-            screw_fxy_peak_N=float(np.linalg.norm(w[:, :2], axis=1).max()),
-            screw_tz_peak_Nm=float(np.abs(w[:, 5]).max()),
-        )
+        n = min(len(w), T - release)
+        w, held = w[:n], closed[release : release + n]
+        fz, fxy, tz = w[:, 2], np.linalg.norm(w[:, :2], axis=1), np.abs(w[:, 5])
+        out.update(screw_fz_peak_N=float(fz.max()), screw_fxy_peak_N=float(fxy.max()), screw_tz_peak_Nm=float(tz.max()))
+        # held vs open: with the fingers open the hand touches nothing, so whatever the estimate
+        # shows then is the arm's own effort (fast wrist unwinds between regrasps), not contact
+        for tag, mask in (("held", held), ("open", ~held)):
+            if mask.any():
+                out[f"screw_fz_p95_{tag}_N"] = float(np.percentile(fz[mask], 95))
+                out[f"screw_fxy_p95_{tag}_N"] = float(np.percentile(fxy[mask], 95))
+                out[f"screw_tz_p95_{tag}_Nm"] = float(np.percentile(tz[mask], 95))
+        out["screw_fz_median_N"] = float(np.median(fz[held])) if held.any() else float(np.median(fz))
+        out["fxy_peak_while_held"] = bool(held[int(np.argmax(fxy))])
+        # the last 10 steps before the window's end (the leg leaving its hole, for a failure)
+        tail = slice(max(n - 10, 0), n)
+        out["screw_fxy_last10_N"] = float(fxy[tail].max())
+        out["screw_fz_last10_N"] = float(fz[tail].max())
     moved = max(moves) > th.top_move or max(yaws) > th.top_yaw_deg
     if done and (not out_of_hole or done[0] <= out_of_hole[0]):
         return verdict("screwing: stalled in the hole", T)  # assembled: a success (see classify)
