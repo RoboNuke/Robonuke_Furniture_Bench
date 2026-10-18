@@ -137,6 +137,18 @@ the EE error against the demo. The success rate is the ceiling a perfect clone r
 `--hold` (20) steps of the last action after the demo ends; `--max_demos`; `--print_every` (50).
 `--zarr <ResiP processed .zarr>` replays ResiP's own demos instead (each episode's rotation targets first scaled back up by `demos.resip_unscale_rotation`: ResiP's `process_pickles.py` shrinks an episode's rotation deltas by one factor, ~12, so their norm over the episode is 0.35 rad; the factor printed is 20° / the stored plateau): the zarr has no joint positions, so the arm is driven to each demo's first EE pose by the env's IK controller (`--settle`, 30 steps), then the fingers and parts are set; the settle error is printed. ResiP's sim offsets the three obstacles per episode (±2 cm in x and y at low randomness) and records the front one, so the replay moves them to each demo's place (the obstacles are kinematic rigid objects for this; nothing else moves them).
 
+### Sorting failed attempts
+
+`scripts/sort_failures.py DIR` (NumPy, no sim) sorts every collector pkl under `DIR` (successes
+and `fails/`, so collect with `--save_failure`) by the stage it broke at: the top push (not in
+the obstacle corner at its release), the leg grasp (not lifted), the carry (dropped), the
+insertion (not in the hole a few steps after the release), or the screwing -- split into *the
+top moved* (from where the leg was released) and *the leg fell out of its hole with the top
+still*, else *stalled in the hole*. It prints one line per attempt, the counts, and the
+successes' medians of every metric; a success that a test would have failed is flagged, as a
+threshold to loosen (`--corner`, `--lift`, `--drop`, `--hole_xz`, `--tilt`, `--top_move`,
+`--top_yaw`). The tests are in `furniture_lab/failures.py`.
+
 ### ResiP's sim
 
 `Isaac-Furniture-OneLeg-ResiP-v0`, `-FB-ResiP-v0` and `-FBAbs-ResiP-v0` are the three interfaces in
