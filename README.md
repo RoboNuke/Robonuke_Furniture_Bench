@@ -137,6 +137,16 @@ the EE error against the demo. The success rate is the ceiling a perfect clone r
 `--hold` (20) steps of the last action after the demo ends; `--max_demos`; `--print_every` (50).
 `--zarr <ResiP processed .zarr>` replays ResiP's own demos instead (each episode's rotation targets first scaled back up by `demos.resip_unscale_rotation`: ResiP's `process_pickles.py` shrinks an episode's rotation deltas by one factor, ~12, so their norm over the episode is 0.35 rad; the factor printed is 20° / the stored plateau): the zarr has no joint positions, so the arm is driven to each demo's first EE pose by the env's IK controller (`--settle`, 30 steps), then the fingers and parts are set; the settle error is printed. ResiP's sim offsets the three obstacles per episode (±2 cm in x and y at low randomness) and records the front one, so the replay moves them to each demo's place (the obstacles are kinematic rigid objects for this; nothing else moves them).
 
+### The screw regrasp pivot (`--screw_pivot`)
+
+A leg released leaning in its hole is regrasped with the hand's axis along the leg's *assumed*
+axis -- the line from the leg's centre to the hole's entry point (the hole axis meeting the
+top's upper face, `ServoOneLegPolicy._hole_point`), not any measured contact -- and hand and
+leg are then turned together about that hole point, which is held still, until the line is on
+the hole axis (`screw_pivot` phase, at most `--pivot_speed` deg/s, 40 steps at most); only then
+does the screw turn begin. Everything it uses (the leg's and the top's poses) is in the policy
+observation. `--screw_press` defaults to 0.002 (the press sweep's best failure mix).
+
 ### Sorting failed attempts
 
 `scripts/sort_failures.py DIR` (NumPy, no sim) sorts every collector pkl under `DIR` (successes

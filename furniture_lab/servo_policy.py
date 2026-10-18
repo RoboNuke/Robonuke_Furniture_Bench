@@ -49,7 +49,7 @@ from .scripted_policy import (
 )
 from .tasks.furniture import frames
 
-__all__ = ["ObjectServo", "ServoOneLegPolicy", "rotvec_to_mat", "mat_to_rotvec", "upright_goal"]
+__all__ = ["ObjectServo", "ServoOneLegPolicy", "rotvec_to_mat", "mat_to_rotvec", "rotate_onto", "upright_goal"]
 
 
 # ------------------------------------------------------------------------------ rotations
@@ -85,6 +85,17 @@ def unwrap(prev: float, now: float) -> float:
 #: an upright leg (OBJ y, the leg's axis, pointing up; bolt down) with its x face normal
 #: at world yaw 0 -- upstream's ``_hole_target`` orientation
 LEG_UP = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
+
+
+def rotate_onto(u: np.ndarray, v: np.ndarray) -> np.ndarray:
+    """The smallest rotation taking unit vector ``u`` onto unit vector ``v``."""
+    u, v = u / np.linalg.norm(u), v / np.linalg.norm(v)
+    axis = np.cross(u, v)
+    n = float(np.linalg.norm(axis))
+    angle = float(np.arctan2(n, u @ v))
+    if n < 1e-9:
+        return np.eye(3) if angle < 1.0 else rotvec_to_mat(np.array([1.0, 0.0, 0.0]) * np.pi)
+    return rotvec_to_mat(axis / n * angle)
 
 
 def upright_goal(R_leg: np.ndarray, dyaw: float = 0.0) -> np.ndarray:
@@ -176,6 +187,8 @@ class ServoOneLegPolicy:
         release_dz: float = 0.05,
         upright_step_deg: float | None = None,
         screw_upright: bool = False,
+        screw_pivot: bool = False,
+        pivot_step_deg: float | None = None,
         insert_yaw_deg: float = 15.0,
         corner_clearance: float = -0.002,
         hover_dz: float = 0.04,
@@ -220,6 +233,12 @@ class ServoOneLegPolicy:
         #: screwing: False turns the hand about the vertical through the leg's axis and presses,
         #: nothing else; True also servos the leg upright and onto the hole axis (the old way)
         self.screw_upright = screw_upright
+        #: screw regrasp with the leg leaning in its hole: grasp with the hand's axis along
+        #: the leg's assumed axis (the line from the leg's centre to the hole's entry point),
+        #: then turn hand and leg about that hole point -- held still -- until the line is on
+        #: the hole axis, and only then screw (see _hole_point / the 'screw_pivot' phase)
+        self.screw_pivot = screw_pivot
+        self.pivot_step = np.radians(rot_step_deg if pivot_step_deg is None else pivot_step_deg)
         #: the leg is carried over the hole and lowered at its yaw when it stood up plus this
         #: (deg, counter-clockwise seen from above = +world yaw), a fixed goal for the whole
         #: placement: turns the thread start away from the yaw that cross-threads
@@ -279,6 +298,24 @@ class ServoOneLegPolicy:
         T_leg = a2r @ s.parts_tag["square_table_leg4"]
         seat = (T_top @ self.leg.default_assembled_pose)[:3, 3]  # leg origin when seated
         return T_top, T_leg, seat
+
+    #: the top's half thickness along its seat axis (OBJ y): its upper face, where a hole opens
+    TOP_HALF_THICKNESS = 0.015625
+
+    def _hole_point(self, T_top: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Leg 4's hole: the point where its axis meets the top's upper face (robot frame), and
+        the hole axis (the top's OBJ y, up). Where the leg *should* enter, not a contact."""
+        hole = self.leg.default_assembled_pose[:3, 3]
+        p = T_top @ np.array([hole[0], self.TOP_HALF_THICKNESS, hole[2], 1.0])
+        return p[:3], T_top[:3, 1] / np.linalg.norm(T_top[:3, 1])
+
+    def _leg_line(self, leg_pos: np.ndarray, T_top: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The leg's assumed axis: the unit line from the hole point up to the leg's centre;
+        with the hole point and the hole axis."""
+        P, h = self._hole_point(T_top)
+        a = leg_pos - P
+        n = float(np.linalg.norm(a))
+        return (h if n < 1e-6 else a / n), P, h
 
     def _corner_goal(self, s: ScriptedState) -> Tuple[np.ndarray, np.ndarray]:
         """The top against the front and left obstacles (``corner_clearance`` < 0 puts the goal
@@ -420,12 +457,35 @@ class ServoOneLegPolicy:
         elif self.phase == "regrasp_free":
             goal_pos, goal_R, grip, skill_complete = self.leg.fsm_step(s, "square_table_top")
             upstream_scaling = True
+            if self.screw_pivot and self.leg.state in self.REGRASP_FREE:
+                # the hand's axis along the leg's assumed axis: the upstream targets (straight
+                # down onto the leg, hovering above it) tilted with the leg, about its centre
+                a, _, _ = self._leg_line(leg_pos, T_top)
+                R_tilt = rotate_onto(np.array([0.0, 0.0, 1.0]), a)
+                goal_pos = leg_pos + R_tilt @ (goal_pos - leg_pos)
+                goal_R = R_tilt @ goal_R
             if self.leg.state not in self.REGRASP_FREE:  # 'screw_align': the leg is in the fingers
                 self.gripper = 1.0
                 grip = 1.0
                 self._leg_yaw_u = leg_yaw(leg_R)
                 self._screw_dz = ee_pos[2] - leg_pos[2]  # the grasp height on the leg
+                self._goto("screw_pivot" if self.screw_pivot else "screw")
+        elif self.phase == "screw_pivot":
+            # hand and leg turned together about the hole point, which stays put, until the
+            # leg's assumed axis is on the hole axis; then screw
+            a, P, h = self._leg_line(leg_pos, T_top)
+            angle = float(np.arccos(np.clip(a @ h, -1.0, 1.0)))
+            if angle < np.radians(1.0) or self.phase_steps > 40:
+                self._leg_yaw_u = leg_yaw(leg_R)
+                self._screw_dz = ee_pos[2] - leg_pos[2]
                 self._goto("screw")
+            else:
+                axis = np.cross(a, h)
+                axis /= np.linalg.norm(axis)
+                step = min(self.gain * angle, self.gain * self.pivot_step)
+                R_step = rotvec_to_mat(axis * step)
+                goal_pos = P + R_step @ (ee_pos - P)
+                goal_R = R_step @ ee_R
         elif self.phase == "screw":
             self._leg_yaw_u = unwrap(self._leg_yaw_u, leg_yaw(leg_R))
             self._yaw_hist.append(self._leg_yaw_u)

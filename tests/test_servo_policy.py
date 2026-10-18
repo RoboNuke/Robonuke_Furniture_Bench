@@ -163,3 +163,48 @@ def test_corner_goal_follows_moved_obstacles():
     w.obst = {k: v + shift for k, v in w.obst.items()}
     goal1, _ = pol._corner_goal(w.state())
     np.testing.assert_allclose(goal1[:2] - goal0[:2], shift[:2], atol=1e-12)
+
+
+def test_screw_pivot_turns_about_the_hole_point_toward_the_hole_axis():
+    """--screw_pivot: with the leg leaning in its hole, the hand turns about the hole's entry
+    point (held still) so the leg's centre-to-hole line comes onto the hole axis."""
+    w = IdealWorld()
+    pol = sv.ServoOneLegPolicy(seed=0, screw_pivot=True, gain=1.0)
+    top = w.parts["square_table_top"]
+    P, h = pol._hole_point(top)
+    # the leg leaning 10 deg about the hole point, the hand at its centre, fingers closed
+    lean = sv.rotvec_to_mat(np.cross(h, [1.0, 0.0, 0.0]) / np.linalg.norm(np.cross(h, [1.0, 0.0, 0.0])) * np.radians(10))
+    leg_c = P + lean @ (h * 0.03)
+    w.parts["square_table_leg4"] = sp.hom(lean @ sv.LEG_UP, leg_c)
+    w.ee = sp.hom(lean @ sp.rot_mat((np.pi, 0, 0)), leg_c)
+    w.width = 0.03
+    pol.phase, pol.gripper = "screw_pivot", 1.0
+    a = pol.act(w.state())
+    a0, _, _ = pol._leg_line(leg_c, top)
+    # the commanded hand pose is the current one turned about P: same distance to P ...
+    assert abs(np.linalg.norm(a.goal_pos - P) - np.linalg.norm(leg_c - P)) < 1e-9
+    # ... and the line from P to it is closer to the hole axis than the leg's was
+    new = (a.goal_pos - P) / np.linalg.norm(a.goal_pos - P)
+    assert np.arccos(np.clip(new @ h, -1, 1)) < np.arccos(np.clip(a0 @ h, -1, 1)) - 1e-3
+    assert a.gripper > 0  # still holding
+
+
+def test_rotate_onto():
+    for u, v in (([0, 0, 1], [0, 1, 0]), ([1, 0, 0], [1, 0, 0]), ([0, 0, 1], [0.1, 0.2, 0.97])):
+        u, v = np.asarray(u, float), np.asarray(v, float) / np.linalg.norm(v)
+        np.testing.assert_allclose(sv.rotate_onto(u, v) @ u, v, atol=1e-9)
+
+
+def test_servo_policy_with_screw_pivot_still_assembles_in_the_ideal_world():
+    w = IdealWorld()
+    pol = sv.ServoOneLegPolicy(seed=0, screw_pivot=True)
+    phases = []
+    for i in range(1500):
+        a = pol.act(w.state())
+        if not phases or phases[-1] != pol.phase:
+            phases.append(pol.phase)
+        if a.done:
+            break
+        w.step(a)
+    assert a.done and pol.assembled(w.state()), phases
+    assert "screw_pivot" in phases

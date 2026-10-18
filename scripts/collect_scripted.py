@@ -52,7 +52,10 @@ parser.add_argument("--release_dz", type=float, default=0.05, help="servo: m the
 parser.add_argument("--insert_floor", type=float, default=0.003, help="servo: m above the seat the leg is never lowered below")
 parser.add_argument("--insert_stop", type=float, default=0.0005, help="servo: the leg counts as stopped when it dropped less than this (m) over 3 steps")
 parser.add_argument("--insert_rate", type=float, default=0.002, help="m per step the held leg is lowered until it stops (also the press while lowering)")
-parser.add_argument("--screw_press", type=float, default=0.005, help="m pressed on the thread per step while screwing (upstream 0.005)")
+parser.add_argument("--screw_press", type=float, default=0.002, help="m pressed on the thread per step while screwing (upstream 0.005; 0.002 sorted best)")
+parser.add_argument("--screw_pivot", action="store_true",
+                    help="servo: regrasp along the leaning leg's axis (centre to hole entry), turn hand+leg about the hole point until upright, then screw")
+parser.add_argument("--pivot_speed", type=float, default=None, help="servo: deg/s cap on that pivot (default: --rot_speed)")
 parser.add_argument("--timeout", type=int, default=600, help="upstream's scripted_timeout for one_leg")
 parser.add_argument("--save_failure", action="store_true", help="keep failed attempts (pkl + video) under fails/")
 parser.add_argument("--record", action="store_true", help="film every attempt (headless ok)")
@@ -347,6 +350,8 @@ def main() -> None:
                 insert_lift=args.insert_lift,
                 release_dz=args.release_dz,
                 screw_upright=args.screw_upright,
+                screw_pivot=args.screw_pivot,
+                pivot_step_deg=None if args.pivot_speed is None else args.pivot_speed * env.step_dt,
                 insert_yaw_deg=args.insert_yaw,
                 upright_step_deg=None if args.upright_speed is None else args.upright_speed * env.step_dt,
                 wind_step_deg=args.wind_speed * env.step_dt,
