@@ -106,3 +106,14 @@ def test_screwing_top_moved_vs_leg_fell_out_vs_stalled():
 @pytest.mark.parametrize("success", [True, False])
 def test_every_verdict_is_a_listed_stage(success):
     assert stage(attempt(success=success)) in F.STAGES
+
+
+def test_forces_are_reported_when_the_wrench_was_recorded():
+    a = attempt(success=True)
+    w = np.zeros((len(a.grip) + 1, 6))
+    w[12, 2] = 7.0   # pressing while lowering (grasp 8 .. release 15)
+    w[20, 2] = 30.0  # pressing on the thread while screwing
+    a.wrench = w
+    r = F.classify(a)
+    assert r["lower_fz_peak_N"] == 7.0 and r["screw_fz_peak_N"] == 30.0
+    assert "screw_fz_peak_N" not in F.classify(attempt(success=True))  # no wrench: no forces

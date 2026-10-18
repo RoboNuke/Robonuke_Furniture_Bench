@@ -147,7 +147,13 @@ top moved* (from where the leg was released) and *the leg fell out of its hole w
 still*, else *stalled in the hole*. It prints one line per attempt, the counts, and the
 successes' medians of every metric; a success that a test would have failed is flagged, as a
 threshold to loosen (`--corner`, `--lift`, `--drop`, `--hole_xz`, `--tilt`, `--top_move`,
-`--top_yaw`). The tests are in `furniture_lab/failures.py`.
+`--top_yaw`). The tests are in `furniture_lab/failures.py`. The collector records the
+estimated external EE wrench every step (`robot_state["ee_wrench"]`, `assembly/wrench.py`:
+the joint torques projected, filtered; `+z` = the parts pushing back up on the hand), and the
+sort then reports the push-down force while the leg is lowered and while screwing, with a table
+of medians per stage. In the ResiP sim the arm runs on joint PD, so the estimate also carries
+the PD's own effort of moving the arm (the inertial terms are off): read the screwing window,
+where the arm moves slowly, not single spikes.
 
 ### ResiP's sim
 

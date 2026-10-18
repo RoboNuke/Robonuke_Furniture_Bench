@@ -12,6 +12,10 @@ than ``tilt_deg`` from the top's ``y``; it is *assembled* by upstream's check
 A screwing failure is split by what moved: the top (``top_move`` / ``top_yaw_deg`` from where
 the leg was released, measured until the leg first leaves its hole) or the leg leaving its hole
 with the top still. A success's top motion is measured until it is first assembled.
+
+With the collector's ``ee_wrench`` recorded (the joint-torque estimate of the external EE
+wrench), each attempt also gets the push-down force (``+z``: what the parts push back on the
+hand with) while the held leg is lowered and while screwing, up to the same window's end.
 """
 
 from __future__ import annotations
@@ -84,6 +88,9 @@ class Attempt:
     leg: np.ndarray
     #: robot-frame obstacle positions (the pkl's, or frames' fixed ones)
     obstacles: Dict[str, np.ndarray] = field(default_factory=dict)
+    #: (T+1, 6) the estimated external EE wrench (force N, torque N m; robot-base frame), if
+    #: the collector recorded it (``robot_state["ee_wrench"]``), else None
+    wrench: Optional[np.ndarray] = None
 
 
 def _pose(flat7: np.ndarray) -> np.ndarray:
@@ -109,6 +116,7 @@ def load_attempt(path: str | Path) -> Attempt:
     top = np.stack([_pose(p[names.index("square_table_top")]) for p in parts])
     leg = np.stack([_pose(p[names.index("square_table_leg4")]) for p in parts])
     ee = np.stack([D._np(o["robot_state"]["ee_pos"]) for o in obs])
+    wrench = np.stack([D._np(o["robot_state"]["ee_wrench"]) for o in obs]) if "ee_wrench" in obs[0]["robot_state"] else None
     recorded = data.get("obstacles_robot")
     obstacles = (
         {k: np.asarray(v, dtype=np.float64) for k, v in recorded.items()}
@@ -124,6 +132,7 @@ def load_attempt(path: str | Path) -> Attempt:
         top=top,
         leg=leg,
         obstacles=obstacles,
+        wrench=wrench,
     )
 
 
@@ -208,6 +217,10 @@ def _stages(a: Attempt, th: Thresholds) -> Dict[str, Any]:
     if release is None:
         return verdict("insertion: never released", T)
 
+    if a.wrench is not None:  # pressing while the held leg is lowered into the hole
+        lower = a.wrench[grasp:release, 2]
+        out.update(lower_fz_peak_N=float(lower.max()), lower_fz_end_N=float(a.wrench[max(release - 3, grasp):release, 2].mean()))
+
     # -- the insertion: a few steps after the release
     t_ins = min(release + th.settle, T)
     ins = _leg_in_top(a, t_ins)
@@ -231,6 +244,17 @@ def _stages(a: Attempt, th: Thresholds) -> Dict[str, Any]:
         screw_steps=stop,
         screw_regrasps=len([c for c in closes if release < c <= release + stop]),
     )
+    if a.wrench is not None:  # the push on the thread while screwing, up to the window's end
+        w = a.wrench[release : release + stop + 1]
+        fz = w[:, 2]
+        held = closed[release : release + stop + 1] if release + stop + 1 <= T else closed[release:]
+        fz_held = fz[: len(held)][held] if held.any() else fz
+        out.update(
+            screw_fz_peak_N=float(fz.max()),
+            screw_fz_median_N=float(np.median(fz_held)),
+            screw_fxy_peak_N=float(np.linalg.norm(w[:, :2], axis=1).max()),
+            screw_tz_peak_Nm=float(np.abs(w[:, 5]).max()),
+        )
     moved = max(moves) > th.top_move or max(yaws) > th.top_yaw_deg
     if done and (not out_of_hole or done[0] <= out_of_hole[0]):
         return verdict("screwing: stalled in the hole", T)  # assembled: a success (see classify)

@@ -258,6 +258,10 @@ def read_state(env, part_names, mesh_frame: str):
             "joint_positions": robot.data.joint_pos[0, arm].cpu().numpy().astype(np.float32),
             "joint_velocities": robot.data.joint_vel[0, arm].cpu().numpy().astype(np.float32),
             "joint_torques": robot.data.applied_torque[0, arm].cpu().numpy().astype(np.float32),
+            # the external EE wrench estimated from the joint torques (assembly/wrench.py,
+            # filtered; robot-base frame, force N then torque N m: what the parts push back
+            # on the hand with -- +z while it presses down). For furniture_lab/failures.py
+            "ee_wrench": env.wrench.filtered[0].cpu().numpy().astype(np.float32),
         },
         "parts_poses": np.concatenate(parts_flat).astype(np.float32),
     }
