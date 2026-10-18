@@ -10,7 +10,8 @@ The geometry is FurnitureBench's, in the top's OBJ frame (``y`` the seat axis): 
 than ``tilt_deg`` from the top's ``y``; it is *assembled* by upstream's check
 (``square_table.ASSEMBLED_POS_THRESHOLD`` / ``ORI_BOUND``, the same as the env's tracker).
 A screwing failure is split by what moved: the top (``top_move`` / ``top_yaw_deg`` from where
-the leg was released) or the leg leaving its hole with the top still.
+the leg was released, measured until the leg first leaves its hole) or the leg leaving its hole
+with the top still. A success's top motion is measured until it is first assembled.
 """
 
 from __future__ import annotations
@@ -214,21 +215,32 @@ def _stages(a: Attempt, th: Thresholds) -> Dict[str, Any]:
     if ins["xz"] > th.hole_xz or ins["tilt"] > th.tilt_deg:
         return verdict("insertion: not in the hole", t_ins)
 
-    # -- screwing: from the release on; split by what moved
+    # -- screwing: from the release until the leg is assembled (a success) or first leaves its
+    #    hole (a failure); the top's motion is measured over that window only, so a success's
+    #    later motion (the hand leaving, the assembly carried) does not count
     top0 = a.top[release]
-    moves = [np.linalg.norm(a.top[t][:3, 3] - top0[:3, 3]) for t in range(release, T + 1)]
-    yaws = [_angle_deg(top0[:3, :3].T @ a.top[t][:3, :3]) for t in range(release, T + 1)]
     legs = [_leg_in_top(a, t) for t in range(release, T + 1)]
+    done = [i for i, g in enumerate(legs) if g["assembled"]]
+    out_of_hole = [i for i, g in enumerate(legs) if g["xz"] > th.hole_xz or g["tilt"] > th.tilt_deg]
+    stop = min(done[:1] + out_of_hole[:1] + [len(legs) - 1])
+    moves = [np.linalg.norm(a.top[release + i][:3, 3] - top0[:3, 3]) for i in range(stop + 1)]
+    yaws = [_angle_deg(top0[:3, :3].T @ a.top[release + i][:3, :3]) for i in range(stop + 1)]
     out.update(
         top_move_mm=float(max(moves)) * 1000,
         top_yaw_deg=float(max(yaws)),
-        screw_regrasps=len([c for c in closes if c > release]),
+        screw_steps=stop,
+        screw_regrasps=len([c for c in closes if release < c <= release + stop]),
     )
-    out_of_hole = [i for i, g in enumerate(legs) if g["xz"] > th.hole_xz or g["tilt"] > th.tilt_deg]
-    moved = [i for i in range(len(moves)) if moves[i] > th.top_move or yaws[i] > th.top_yaw_deg]
-    if moved and (not out_of_hole or moved[0] <= out_of_hole[0]):
-        return verdict("screwing: top moved", release + moved[0])
+    moved = max(moves) > th.top_move or max(yaws) > th.top_yaw_deg
+    if done and (not out_of_hole or done[0] <= out_of_hole[0]):
+        return verdict("screwing: stalled in the hole", T)  # assembled: a success (see classify)
+    extra = {}
     if out_of_hole:
         i = out_of_hole[0]
-        return verdict("screwing: leg fell out", release + i, out_xz_mm=legs[i]["xz"] * 1000, out_tilt_deg=legs[i]["tilt"])
+        extra = dict(out_xz_mm=legs[i]["xz"] * 1000, out_tilt_deg=legs[i]["tilt"])
+    if moved:  # the top moved before the leg left its hole (or with the leg still in it)
+        i = next(k for k in range(len(moves)) if moves[k] > th.top_move or yaws[k] > th.top_yaw_deg)
+        return verdict("screwing: top moved", release + i, **extra)
+    if out_of_hole:
+        return verdict("screwing: leg fell out", release + out_of_hole[0], **extra)
     return verdict("screwing: stalled in the hole", T)
