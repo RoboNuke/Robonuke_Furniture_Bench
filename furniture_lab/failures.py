@@ -32,7 +32,7 @@ from .scripted_policy import APRIL_TO_ROBOT, ORI_BOUND, OneLegScriptedPolicy, ge
 from .tasks.furniture import frames
 from .tasks.furniture.square_table import ASSEMBLED_POS_THRESHOLD
 
-__all__ = ["Thresholds", "Attempt", "load_attempt", "classify", "STAGES"]
+__all__ = ["Thresholds", "Attempt", "load_attempt", "load_trace", "classify", "STAGES"]
 
 #: every verdict ``classify`` can return, in pipeline order
 STAGES = (
@@ -131,6 +131,47 @@ def load_attempt(path: str | Path) -> Attempt:
         ee_pos=ee,
         top=top,
         leg=leg,
+        obstacles=obstacles,
+        wrench=wrench,
+    )
+
+
+def load_trace(path: str | Path) -> Attempt:
+    """One ``scripts/replay_abs.py --save`` trace (.npz) -> an :class:`Attempt`: this sim's
+    replay of a demo, read from its FBAbs observations (61, or 70 with the obstacle pose) and
+    the absolute actions sent (gripper ``> 0`` closes). Index t is the state before action t,
+    as in a pkl: ``start_obs`` then ``obs_here``. The wrench is there for traces saved since
+    ``robot_snapshot`` records ``ee_wrench``."""
+    z = np.load(path, allow_pickle=False)
+    obs = np.concatenate([z["start_obs"][None], z["obs_here"]])
+    act = z["action"]
+    T = act.shape[0]
+    obs = obs[: T + 1]
+    names = list(D.PART_NAMES)
+
+    def part(i: int) -> np.ndarray:
+        block = obs[:, 16 + 9 * i : 16 + 9 * (i + 1)]
+        return np.stack([_hom(D.rot6d_to_mat(b[3:9]), b[:3]) for b in block])
+
+    obstacles = {"obstacle_front": np.asarray(frames.OBSTACLE_FRONT_POS), **{k: np.asarray(v) for k, v in frames.OBSTACLE_SIDE_POS.items()}}
+    if obs.shape[1] >= 70:  # the ResiP task observes the front obstacle (tag frame): place all three
+        front = np.asarray(frames.TAG_POS_W) + frames.TAG_ROT_W @ obs[0, 61:64].astype(np.float64)
+        base = np.asarray(frames.OBSTACLE_FRONT_POS)
+        obstacles = {k: v - base + front for k, v in obstacles.items()}
+    wrench = None
+    if "ee_wrench" in z.files:
+        wrench = np.concatenate([z["start_ee_wrench"][None], z["ee_wrench"]])[: T + 1] if "start_ee_wrench" in z.files else z["ee_wrench"]
+    import json
+
+    meta = json.loads(str(z["meta"])) if "meta" in z.files else {}
+    return Attempt(
+        path=str(path),
+        success=bool(meta.get("success", bool(z["assembled"].any()) if "assembled" in z.files else False)),
+        error="",
+        grip=act[:, 9].astype(np.float64),
+        ee_pos=obs[:, 0:3].astype(np.float64),
+        top=part(names.index("square_table_top")),
+        leg=part(names.index("square_table_leg4")),
         obstacles=obstacles,
         wrench=wrench,
     )

@@ -1,6 +1,7 @@
 """Sort a folder of collected one_leg attempts by the stage each one broke at.
 
     python scripts/sort_failures.py ~/tmp/phys/base_fail            # every *.pkl under it, fails/ included
+    python scripts/sort_failures.py ~/replay_traces/resip            # replay_abs --save traces (.npz)
     python scripts/sort_failures.py DIR --corner 0.01 --top_move 0.01 --top_yaw 8 --hole_xz 0.013 --tilt 16
 
 No sim (NumPy only). Collect with ``--save_failure`` so the failures are kept (and ``--record``
@@ -21,7 +22,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from furniture_lab.failures import STAGES, Thresholds, classify, load_attempt  # noqa: E402
+from furniture_lab.failures import STAGES, Thresholds, classify, load_attempt, load_trace  # noqa: E402
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument("dir", help="a collector --out_dir (searched recursively for *.pkl)")
@@ -41,9 +42,11 @@ FORCES = ("lower_fz_peak_N", "lower_fz_end_N", "screw_fz_peak_N", "screw_fz_medi
 
 
 def main() -> int:
-    paths = sorted(Path(args.dir).expanduser().rglob("*.pkl"))
+    root = Path(args.dir).expanduser()
+    # collector pkls, or replay_abs --save traces (.npz): the sim's replay of each demo
+    paths = sorted(root.rglob("*.pkl")) + sorted(root.rglob("*.npz"))
     if not paths:
-        raise SystemExit(f"no .pkl under {args.dir}")
+        raise SystemExit(f"no .pkl or .npz under {args.dir}")
     th = Thresholds(
         corner=args.corner, lift=args.lift, drop=args.drop, hole_xz=args.hole_xz,
         tilt_deg=args.tilt, top_move=args.top_move, top_yaw_deg=args.top_yaw,
@@ -51,7 +54,7 @@ def main() -> int:
     rows = []
     for path in paths:
         try:
-            r = classify(load_attempt(path), th)
+            r = classify((load_trace if path.suffix == ".npz" else load_attempt)(path), th)
         except Exception as exc:  # noqa: BLE001 -- report and keep going: one bad file is not the batch
             print(f"{path}: could not read ({type(exc).__name__}: {exc})")
             continue
@@ -91,7 +94,7 @@ def main() -> int:
                 cells.append(f"{np.median(vals):18.1f}" if vals else f"{'-':>18s}")
             print(f"  {k:18s}" + "".join(cells))
     else:
-        print("\n(no ee_wrench in these pkls: collect again with the current collect_scripted.py for the forces)")
+        print("\n(no ee_wrench in these files: collect / replay again with the current scripts for the forces)")
     return 0
 
 

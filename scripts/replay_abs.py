@@ -322,7 +322,8 @@ def part_from_ee(o: np.ndarray, slot: int) -> np.ndarray:
 
 
 def robot_snapshot(env) -> dict:
-    """The arm and finger joint state of env 0: position, target, velocity, applied effort."""
+    """The arm and finger joint state of env 0 (position, target, velocity, applied effort) and
+    the estimated external EE wrench."""
     robot = env.scene["robot"]
     d = robot.data
     out = {}
@@ -331,6 +332,9 @@ def robot_snapshot(env) -> dict:
         out[f"{key}_q_target"] = d.joint_pos_target[0, ids].cpu().numpy()
         out[f"{key}_qd"] = d.joint_vel[0, ids].cpu().numpy()
         out[f"{key}_effort"] = d.applied_torque[0, ids].cpu().numpy()
+    # the estimated external EE wrench (assembly/wrench.py; base frame, N then N m; +z = the
+    # parts pushing back up on the hand), for furniture_lab/failures.py
+    out["ee_wrench"] = env.wrench.filtered[0].cpu().numpy()
     return out
 
 
