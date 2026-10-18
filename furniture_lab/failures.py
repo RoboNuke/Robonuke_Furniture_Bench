@@ -285,6 +285,22 @@ def _stages(a: Attempt, th: Thresholds) -> Dict[str, Any]:
         screw_steps=stop,
         screw_regrasps=len([c for c in closes if release < c <= release + stop]),
     )
+    # the leg's lean while the fingers hold it during screwing (does the grasp stand it up?):
+    # the first screw grasp (from 3 steps after it closes, once the fingers have settled, to
+    # its release) and, over every held step up to the window's end, the 95th percentile and
+    # the last 10 held steps (a failure: just before the leg left its hole)
+    screw_closes = [c for c in closes if c > release]
+    held_idx = [i for i in range(stop + 1) if release + i < T and closed[release + i]]
+    if screw_closes:
+        c1 = screw_closes[0]
+        o1 = next((o for o in opens if o > c1), T)
+        first = [i for i in held_idx if c1 + 3 <= release + i < o1]
+        if first:
+            out["grasp1_tilt_deg"] = float(np.median([legs[i]["tilt"] for i in first]))
+            out["grasp1_xz_mm"] = float(np.median([legs[i]["xz"] for i in first])) * 1000
+    if held_idx:
+        out["held_tilt_p95_deg"] = float(np.percentile([legs[i]["tilt"] for i in held_idx], 95))
+        out["held_tilt_last10_deg"] = float(np.median([legs[i]["tilt"] for i in held_idx[-10:]]))
     if a.wrench is not None:  # the forces while screwing, up to the window's end
         w = a.wrench[release : release + stop + 1]
         n = min(len(w), T - release)

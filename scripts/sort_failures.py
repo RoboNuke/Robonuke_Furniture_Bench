@@ -36,7 +36,11 @@ parser.add_argument("--top_move", type=float, default=d.top_move, help="m: top t
 parser.add_argument("--top_yaw", type=float, default=d.top_yaw_deg, help="deg: top rotation during screwing")
 args = parser.parse_args()
 
-METRICS = ("corner_mm", "lift_mm", "insert_xz_mm", "insert_tilt_deg", "insert_height_mm", "top_move_mm", "top_yaw_deg", "final_height_mm")
+METRICS = (
+    "corner_mm", "lift_mm", "insert_xz_mm", "insert_tilt_deg", "insert_height_mm",
+    "grasp1_tilt_deg", "grasp1_xz_mm", "held_tilt_p95_deg", "held_tilt_last10_deg",
+    "top_move_mm", "top_yaw_deg", "final_height_mm",
+)
 #: with the collector's ee_wrench recorded: the push-down while lowering and screwing
 FORCES = (
     "lower_fz_peak_N", "lower_fz_end_N", "screw_fz_peak_N", "screw_fz_median_N", "screw_fxy_peak_N", "screw_tz_peak_Nm",
@@ -90,6 +94,18 @@ def main() -> int:
             vals = [r[k] for r in ok if k in r]
             if vals:
                 print(f"  {k:18s} {np.median(vals):7.1f}  (max {np.max(vals):.1f})")
+    tilt = [k for k in ("insert_tilt_deg", "grasp1_tilt_deg", "grasp1_xz_mm", "held_tilt_p95_deg", "held_tilt_last10_deg")
+            if any(k in r for _, r in rows)]
+    if tilt:
+        stages = [st for st in STAGES if counts.get(st)]
+        print("\nleg lean, median per stage (in the top's frame; screwing: while the fingers hold it):")
+        print("  " + " " * 22 + "".join(f"{st.split(': ')[-1][:16]:>18s}" for st in stages))
+        for k in tilt:
+            cells = []
+            for st in stages:
+                vals = [r[k] for _, r in rows if r["stage"] == st and k in r]
+                cells.append(f"{np.median(vals):18.1f}" if vals else f"{'-':>18s}")
+            print(f"  {k:22s}" + "".join(cells))
     have = [k for k in FORCES if any(k in r for _, r in rows)]
     if have:
         stages = [st for st in STAGES if counts.get(st)]
