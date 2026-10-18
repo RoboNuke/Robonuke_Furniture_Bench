@@ -1,7 +1,7 @@
 """Sort a folder of collected one_leg attempts by the stage each one broke at.
 
     python scripts/sort_failures.py ~/tmp/phys/base_fail            # every *.pkl under it, fails/ included
-    python scripts/sort_failures.py DIR --corner 0.01 --top_move 0.01 --top_yaw 8 --hole_xz 0.006 --tilt 15
+    python scripts/sort_failures.py DIR --corner 0.01 --top_move 0.01 --top_yaw 8 --hole_xz 0.013 --tilt 16
 
 No sim (NumPy only). Collect with ``--save_failure`` so the failures are kept (and ``--record``
 for their videos, ``fails/failN.mp4`` beside ``fails/failN.pkl``). One line per attempt, then

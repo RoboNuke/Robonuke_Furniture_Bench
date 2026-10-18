@@ -58,9 +58,11 @@ class Thresholds:
     lift: float = 0.02
     #: m: the leg counts as dropped while carried once its distance from the EE grew this much
     drop: float = 0.03
-    #: m / deg: the leg is in its hole within this of the hole's axis and this tilt
-    hole_xz: float = 0.006
-    tilt_deg: float = 15.0
+    #: m / deg: the leg is in its hole within this of the hole's axis and this tilt. The
+    #: servo policy's successes release the leg leaning in its hole: 9.4-10.2 mm off-axis and
+    #: 11.7-12.6 deg at release (20 of them, ResiP sim), so these sit just above that
+    hole_xz: float = 0.013
+    tilt_deg: float = 16.0
     #: steps after the leg release before the insertion is judged (the leg settles)
     settle: int = 5
     #: m / deg: the top moved during screwing past these (from the leg release on)
