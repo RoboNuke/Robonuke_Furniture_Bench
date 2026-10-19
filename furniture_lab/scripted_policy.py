@@ -213,6 +213,10 @@ class SquareTableTopPart(_Part):
         super().__init__("square_table_top", rng, noise)
         self.half_width = 0.08125
         self.body_grip_width = 0.01
+        #: demo variation (0 = upstream): the grasp slid this far (m) along the gripped edge
+        #: from its centre, and the hand turned this much (rad) about the vertical there
+        self.grasp_along = 0.0
+        self.grasp_yaw = 0.0
         self.skill_complete_next_states = ("push", "go_up")
         # rel_pose_from_center, in tag-id order (SquareTableTop.__init__)
         hw = self.half_width
@@ -245,6 +249,9 @@ class SquareTableTopPart(_Part):
 
         if self._state == "reach_body_grasp_xy":
             body_pose = self._find_closest_y(body_pose)
+            # the edge's local x runs along it and its local y is the top's normal (up), so
+            # this slides the grasp along the edge and turns the hand about the vertical
+            body_pose = body_pose @ get_mat([self.grasp_along, 0, 0], [0, self.grasp_yaw, 0])
             rot = body_pose @ get_mat([0, 0, 0], [np.pi / 2, 0, 0])
             target_pos = (a2r @ np.append(body_pose[:3, 3], 1.0))[:3]
             target_ori = (a2r @ rot)[:3, :3]
@@ -325,7 +332,10 @@ class SquareTableLegPart(_Part):
         super().__init__(name, rng, noise)
         self.half_width = 0.015
         self.grasp_margin_x = 0.0
+        #: the screw regrasp this far (m) above the leg's centre (pre_grasp / grasp_lower)
         self.grasp_margin_z = 0.0
+        #: demo variation (0 = upstream): the floor grasp slid this far (m) along the leg's axis
+        self.grasp_along = 0.0
         self.default_assembled_pose = get_mat(default_assembled_pos, [0, 0, 0])
         self.skill_complete_next_states = ("lift_up", "insert")
         self.pre_assemble_done = True  # a leg has no pre-assembly phase
@@ -465,6 +475,12 @@ class SquareTableLegPart(_Part):
             target_pos[2] = ee_pos[2]
             target_pos[1] += 0.01
             target_pos[0] += self.grasp_margin_x
+            if self.grasp_along:  # along the lying leg's own axis (OBJ y), kept horizontal
+                axis = (a2r @ leg_pose)[:3, 1].copy()
+                axis[2] = 0.0
+                n = float(np.linalg.norm(axis))
+                if n > 1e-6:
+                    target_pos += self.grasp_along * axis / n
             target = self.add_noise_first_target(hom(target_ori, target_pos), ori_noise=np.array([1.0, 0, 0, 0]))
             if self.satisfy(ee_pose, target, pos_error_threshold=0.02):
                 self.prev_pose = target.copy()

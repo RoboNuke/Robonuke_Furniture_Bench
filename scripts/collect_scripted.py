@@ -18,11 +18,19 @@ upstream's ``scripted_timeout`` of 600 steps (failure). With ``--record`` every 
 filmed: a success keeps its video beside its pkl, a failure keeps it under ``fails/`` only
 with ``--save_failure``.
 
+Demo variety (servo policy; ``furniture_lab/variation.py``): ``--vary`` draws every attempt's
+expert -- speeds, waypoints, grasp points, the push's approach -- around these settings (the
+draw is saved in the pkl as ``variation``); ``--dart_prob P`` adds DART bursts to the commands
+sent in free space while ``actions`` keeps the expert's clean commands (the executed ones are
+``actions_executed``).
+
 Not headless, with the viewport window focused: ``k`` makes the current rollout fail now,
 ``l`` quits immediately (the current attempt is discarded).
 """
 
 import argparse
+import dataclasses
+import inspect
 import math
 import pickle
 import sys
@@ -58,6 +66,13 @@ parser.add_argument("--screw_pivot", action="store_true",
 parser.add_argument("--pivot_dz", type=float, default=0.0,
                     help="servo: m the --screw_pivot arc is raised along the hole axis (same arc, presses less on the hole)")
 parser.add_argument("--pivot_speed", type=float, default=None, help="servo: deg/s cap on that pivot (default: --rot_speed)")
+parser.add_argument("--vary", action="store_true",
+                    help="servo: draw every attempt's speeds, waypoints, grasp points and push approach (furniture_lab/variation.py)")
+parser.add_argument("--dart_prob", type=float, default=0.0,
+                    help="servo: per-step chance a DART burst starts in a free-space state (0 = off; e.g. 0.05)")
+parser.add_argument("--dart_steps", type=int, default=4, help="steps a DART burst lasts")
+parser.add_argument("--dart_pos", type=float, default=0.004, help="m added to the position command per step of a burst")
+parser.add_argument("--dart_rot", type=float, default=2.0, help="deg added to the rotation command per step of a burst")
 parser.add_argument("--timeout", type=int, default=600, help="upstream's scripted_timeout for one_leg")
 parser.add_argument("--save_failure", action="store_true", help="keep failed attempts (pkl + video) under fails/")
 parser.add_argument("--record", action="store_true", help="film every attempt (headless ok)")
@@ -106,6 +121,7 @@ from robonuke_rl_core.recording import VideoWriter, read_camera_rgb  # noqa: E40
 
 from furniture_lab import scripted_policy as sp  # noqa: E402
 from furniture_lab import servo_policy as sv  # noqa: E402
+from furniture_lab import variation as vr  # noqa: E402
 from furniture_lab.tasks.assembly.assembly_env import AssemblyEnv  # noqa: E402
 from furniture_lab.tasks.assembly.assembly_env_cfg import EE_OFFSET  # noqa: E402
 from furniture_lab.tasks.assembly.mdp.state import parts_pose_w, tracker  # noqa: E402
@@ -328,6 +344,10 @@ def main() -> None:
     # continue the fail<n> numbering across runs
     failures = max([int(f.stem[4:]) for f in fails_dir.glob("fail*.pkl") if f.stem[4:].isdigit()] + [0])
     keys = AbortKeys()
+    if args.policy != "servo" and (args.vary or args.dart_prob > 0):
+        raise SystemExit("--vary / --dart_prob need --policy servo")
+    # the servo expert's own defaults for the knobs the collector has no flag for
+    servo_defaults = {k: v.default for k, v in inspect.signature(sv.ServoOneLegPolicy).parameters.items()}
     while saved < args.num_demos:
         attempt += 1
         keys.new_attempt()
@@ -338,12 +358,15 @@ def main() -> None:
             env.step(zero)  # let the parts settle after the reset
         tmp_video = out_root / f".attempt{attempt}.mp4"
         recorder = Recorder(env, tmp_video) if args.record else None
+        variation = None
+        dart = None
         if args.policy == "servo":
-            policy = sv.ServoOneLegPolicy(
+            kwargs = dict(
                 seed=args.seed + attempt - 1,
                 noise=not args.no_noise,
                 pos_step=args.pos_speed * env.step_dt,
                 rot_step_deg=args.rot_speed * env.step_dt,
+                screw_step_deg=args.rot_speed * env.step_dt,
                 lead_deg=args.lead,
                 press=args.screw_press,
                 insert_rate=args.insert_rate,
@@ -360,6 +383,21 @@ def main() -> None:
                 wind_step_deg=args.wind_speed * env.step_dt,
                 gain=args.servo_gain if args.servo_gain is not None else (1.0 if args.sim == "resip" else 5.0),
             )
+            if args.vary:
+                base = {k: servo_defaults[k] for k in ("carry_dz", "over_dz", "hover_dz", "corner_clearance", "top_up_z")}
+                base.update({k: kwargs[k] for k in (
+                    "pos_step", "rot_step_deg", "screw_step_deg", "wind_step_deg", "insert_rate", "insert_yaw_deg",
+                    "press", "release_dz", "upright_step_deg", "pivot_step_deg")})
+                variation = vr.sample_variation(np.random.default_rng([args.seed, attempt, 1]), base)
+                kwargs.update(variation)
+                print("[collect] variation: " + ", ".join(
+                    f"{k} {v:.4g}" if isinstance(v, float) else f"{k} {tuple(round(x, 4) for x in v)}"
+                    for k, v in variation.items()), flush=True)
+            policy = sv.ServoOneLegPolicy(**kwargs)
+            if args.dart_prob > 0:
+                dart = vr.DartBursts(
+                    np.random.default_rng([args.seed, attempt, 2]), args.dart_prob, args.dart_steps, args.dart_pos, args.dart_rot
+                )
         else:
             policy = sp.OneLegScriptedPolicy(seed=args.seed + attempt - 1, noise=not args.no_noise)
             policy.leg.yaw_step_deg = args.rot_speed * env.step_dt
@@ -367,7 +405,7 @@ def main() -> None:
             policy.leg.insert_lift = args.insert_lift
             policy.leg.insert_rate = args.insert_rate
         policy.leg.screw_press = args.screw_press
-        obs_list, acts, rews, skills = [], [], [], []
+        obs_list, acts, acts_exec, rews, skills = [], [], [], [], []
         assembled_step = None
         last_state = ""
         t0 = time.time()
@@ -399,11 +437,19 @@ def main() -> None:
                 print(f"[collect] step {t:4d}: {a.state}  (leg z {leg_z:.4f}, ee z {state.ee_pos[2]:.4f})", flush=True)
                 last_state = a.state
             obs_list.append(obs)
-            # upstream's 8-D action, xyzw
+            # upstream's 8-D action, xyzw: the expert's own command (the BC label) ...
             q = a.delta_quat
             acts.append(np.concatenate([a.delta_pos, [q[1], q[2], q[3], q[0]], [a.gripper]]).astype(np.float32))
+            # ... and, during a DART burst, a perturbed one is what the env is given
+            sent = a
+            off = dart.offset(a.state) if dart is not None else None
+            if off is not None:
+                dpos, dquat = vr.DartBursts.apply(a.delta_pos, a.delta_quat, off)
+                sent = dataclasses.replace(a, delta_pos=dpos, delta_quat=dquat)
+            qs = sent.delta_quat
+            acts_exec.append(np.concatenate([sent.delta_pos, [qs[1], qs[2], qs[3], qs[0]], [sent.gripper]]).astype(np.float32))
             _, ee_quat_b = ee_pose_b(env)
-            env.step(env_action(env, a, ee_quat_b))
+            env.step(env_action(env, sent, ee_quat_b))
             now_assembled = bool(assembled_now(env))  # the raw check, not the latch
             if a.assembled and assembled_step is None:  # the policy's own check fired
                 assembled_step = t
@@ -430,7 +476,8 @@ def main() -> None:
             print("[collect] assembled during the episode but NOT at the end: counted as a failure", flush=True)
         print(
             f"[collect] demo {attempt}: {'success' if success else 'FAILED'} after {len(acts)} steps "
-            f"({time.time() - t0:.0f} s), assembled at {assembled_step}",
+            f"({time.time() - t0:.0f} s), assembled at {assembled_step}"
+            + (f"; DART: {dart.bursts} bursts, {dart.perturbed_steps} steps perturbed" if dart is not None else ""),
             flush=True,
         )
         if recorder is not None:
@@ -448,9 +495,18 @@ def main() -> None:
                 k: (env.scene[k].data.root_pos_w[0] - env.scene.env_origins[0]).cpu().numpy().astype(np.float64)
                 for k in ("obstacle_front", "obstacle_right", "obstacle_left")
             },
+            # the expert drawn for this attempt (--vary; None = the fixed expert)
+            "variation": variation,
             "error": aborted or out_of_limits,
             "error_description": "failed by key" if aborted else ("part out of position limits" if out_of_limits else ""),
         }
+        if dart is not None:
+            # what the env was actually given (replay these); ``actions`` are the clean labels
+            data["actions_executed"] = acts_exec
+            data["dart"] = {
+                "prob": args.dart_prob, "steps": args.dart_steps, "pos": args.dart_pos, "rot_deg": args.dart_rot,
+                "bursts": dart.bursts, "perturbed_steps": dart.perturbed_steps, "states": sorted(vr.DART_STATES),
+            }
         if success:
             stamp = time.strftime("%Y-%m-%d-%H:%M:%S")
             demo_dir = out_root / stamp

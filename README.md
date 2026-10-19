@@ -149,6 +149,29 @@ steps at most); only then does the screw turn begin. `--pivot_dz` raises that sa
 hole axis (its centre above the hole point, ramped in over 5 steps), so the hand presses less. Everything it uses (the leg's and the top's poses) is in the policy
 observation. `--screw_press` defaults to 0.002 (the press sweep's best failure mix).
 
+### Demo variety (`--vary`, `--dart_prob`)
+
+Fifty demos from one fixed expert follow one corridor through the task, and BC clones that
+corridor. Two collector options (servo policy; `furniture_lab/variation.py`) widen it:
+
+* `--vary` draws every attempt's expert around the collector's settings (the centre of every
+  range is the fixed expert; `VariationRanges` holds the ranges): speeds (translation x0.75-1.3,
+  held rotation x0.75-1.3, the screw turn x0.85-1.15, winding x0.75-1.3, lowering x0.75-1.25);
+  waypoints (carry height +-3 cm, height over the hole +0-10 mm, regrasp hover -1/+2 cm,
+  placement yaw +-10 deg, screw press +-0.5 mm, rise after the leg release +-2 cm, corner
+  clearance -2/+1 mm (kept inside the walls), the hand's height after the top +-2 cm); grasps
+  (the leg gripped +-15 mm along its axis, the screw regrasp -5/+15 mm on the leg, the top's
+  edge gripped +-3 cm along it with the hand turned +-8 deg); and the push, first to a via point
+  0-5 cm back from the corner in x and in y, then into it. The corner never changes. The draw
+  is printed and saved in the pkl (`variation`).
+* `--dart_prob P` (with `--dart_steps` 4, `--dart_pos` 0.004 m, `--dart_rot` 2 deg) adds DART
+  bursts: in free-space states only (`DART_STATES`: approaches, rises, carrying and standing the
+  leg up, over the hole, the regrasp hover) a burst starts with chance P per step and adds a
+  fixed random offset to every command *sent* for `--dart_steps` steps; the closed-loop expert
+  pulls back. The pkl's `actions` stay the expert's own commands (the BC labels, now with
+  recoveries); `actions_executed` holds what the env got. `replay_abs.py` and `load_demo` replay
+  the executed ones; `fb_abs_frames` (training) reads `actions` unless `executed=True`.
+
 ### Sorting failed attempts
 
 `scripts/sort_failures.py DIR` (NumPy, no sim) sorts every collector pkl under `DIR` (successes

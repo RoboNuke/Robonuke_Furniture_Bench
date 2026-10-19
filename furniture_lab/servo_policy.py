@@ -197,6 +197,15 @@ class ServoOneLegPolicy:
         wind_step_deg: float = 9.0,
         assembled_hold_steps: int = 5,
         gain: float = 5.0,
+        screw_step_deg: float | None = None,
+        carry_dz: float = 0.10,
+        over_dz: float = 0.030,
+        top_up_z: float = 0.10,
+        push_via: Tuple[float, float] = (0.0, 0.0),
+        top_grasp_along: float = 0.0,
+        top_grasp_yaw_deg: float = 0.0,
+        leg_grasp_along: float = 0.0,
+        regrasp_dz: float = 0.0,
     ) -> None:
         self.rng = np.random.default_rng(seed)
         self.noise = noise
@@ -204,6 +213,26 @@ class ServoOneLegPolicy:
         self.leg = SquareTableLegPart("square_table_leg4", OneLegScriptedPolicy.LEG4_ASSEMBLED_POS, self.rng, noise)
         self.leg.q7_margin = q7_margin
         self.leg.hover_dz = hover_dz
+        # -- demo variation (furniture_lab/variation.py samples these per episode; the
+        #    defaults are the fixed expert). Where the top's near edge is gripped: slid along
+        #    the edge (m) and the hand turned about the vertical (deg); where the lying leg is
+        #    gripped along its axis (m); the screw regrasp's height above the leg centre (m)
+        self.top.grasp_along = float(top_grasp_along)
+        self.top.grasp_yaw = float(np.radians(top_grasp_yaw_deg))
+        self.leg.grasp_along = float(leg_grasp_along)
+        self.leg.grasp_margin_z = float(regrasp_dz)
+        #: m above the seat the leg is lifted to and stood up at (was fixed at 0.10)
+        self.carry_dz = float(carry_dz)
+        #: m above the seat the leg's origin is brought over the hole before lowering (the
+        #: bolt is 25.4 mm long; was fixed at 0.030)
+        self.over_dz = float(over_dz)
+        #: robot-frame z the hand rises to after releasing the top (was fixed at 0.10)
+        self.top_up_z = float(top_up_z)
+        #: m (x, y) back from the corner goal, away from the front and left walls: the top is
+        #: first servoed there, then into the corner, so pushes approach it from different
+        #: directions; (0, 0) = straight into the corner
+        self.push_via = np.array([-abs(float(push_via[0])), -abs(float(push_via[1])), 0.0])
+        self._via_done = not bool(np.any(self.push_via))
         # ``gain``: how much bigger a command is than the motion wanted from it -- 5 for the
         # port's OSC, which closes ~20 % of a command per step (see ObjectServo); 1 for a
         # controller that closes it all (ResiP's differential IK into stiff joint PD)
@@ -231,6 +260,8 @@ class ServoOneLegPolicy:
         self.release_dz = release_dz
         self.pos_step = pos_step
         self.rot_step = np.radians(rot_step_deg)
+        #: the wrist turn per step while screwing (default rot_step_deg)
+        self.screw_step = np.radians(rot_step_deg if screw_step_deg is None else screw_step_deg)
         #: screwing: False turns the hand about the vertical through the leg's axis and presses,
         #: nothing else; True also servos the leg upright and onto the hole axis (the old way)
         self.screw_upright = screw_upright
@@ -374,11 +405,23 @@ class ServoOneLegPolicy:
                 self._goto("top_servo")
         elif self.phase == "top_servo":
             tgt_pos, tgt_R = self._corner_goal(s)
-            goal_pos, goal_R, ep, er = self.servo.step(T_top[:3, 3], T_top[:3, :3], tgt_pos, tgt_R, ee_pos, ee_R)
+            if not self._via_done:  # first the via point back from the corner (push_via)
+                via = tgt_pos + self.push_via
+                goal_pos, goal_R, ep, er = self.servo.step(T_top[:3, 3], T_top[:3, :3], via, tgt_R, ee_pos, ee_R)
+                goal_pos[2] = ee_pos[2]
+                if ep < 0.01 or self.phase_steps > 60:
+                    self._via_done = True
+                    self._track = []  # the wall-stall test starts at the corner leg
+            else:
+                goal_pos, goal_R, ep, er = self.servo.step(T_top[:3, 3], T_top[:3, :3], tgt_pos, tgt_R, ee_pos, ee_R)
             goal_pos[2] = ee_pos[2]  # slide it: no lift, no press
             # done when it has stopped moving near the goal: the goal is inside the walls,
             # so that is the walls holding it (converged-in-free-space also stalls)
-            against_wall = self._stalled(np.array([T_top[0, 3], T_top[1, 3], 0.1 * yaw_of(T_top[:3, :3])]), 5, 0.0003) and ep < 0.015
+            against_wall = (
+                self._via_done
+                and self._stalled(np.array([T_top[0, 3], T_top[1, 3], 0.1 * yaw_of(T_top[:3, :3])]), 5, 0.0003)
+                and ep < 0.015
+            )
             if against_wall:
                 self.hold_pose = hom(ee_R, ee_pos)
                 self.gripper = -1.0
@@ -392,9 +435,9 @@ class ServoOneLegPolicy:
             # straight up to z 0.10, ramped (a one-step jump lets the joint PD take a
             # joint-space path and swing the open fingers through the top)
             goal_pos = self.hold_pose[:3, 3].copy()
-            goal_pos[2] = min(0.10, max(ee_pos[2], goal_pos[2]) + self.pos_step)
+            goal_pos[2] = min(self.top_up_z, max(ee_pos[2], goal_pos[2]) + self.pos_step)
             goal_R = self.hold_pose[:3, :3].copy()
-            if abs(ee_pos[2] - 0.10) < 0.01:
+            if abs(ee_pos[2] - self.top_up_z) < 0.01:
                 self.leg.reset()
                 self.leg._state = "reach_leg_floor_xy"
                 self.leg.gripper_action = -1
@@ -412,20 +455,20 @@ class ServoOneLegPolicy:
         # ---------------------------------------------------------------- the leg: carry
         elif self.phase == "leg_lift":
             # straight up, orientation as grasped (upstream lifts before it turns the leg)
-            tgt = np.array([leg_pos[0], leg_pos[1], seat[2] + 0.10])
+            tgt = np.array([leg_pos[0], leg_pos[1], seat[2] + self.carry_dz])
             goal_pos, goal_R, ep, er = self.servo.step(leg_pos, leg_R, tgt, leg_R, ee_pos, ee_R)
             if ep < 0.01:
                 self._goto("leg_upright")
         elif self.phase == "leg_upright":
             # stand it up in the air: axis vertical, bolt down, by the smallest rotation
-            tgt = np.array([leg_pos[0], leg_pos[1], seat[2] + 0.10])
+            tgt = np.array([leg_pos[0], leg_pos[1], seat[2] + self.carry_dz])
             goal_pos, goal_R, ep, er = self.upright_servo.step(leg_pos, leg_R, tgt, upright_goal(leg_R), ee_pos, ee_R)
             if ep < 0.01 and leg_tilt_deg(leg_R) < 3.0:
                 self._place_R = upright_goal(leg_R, self.insert_yaw)
                 self._goto("leg_over")
         elif self.phase == "leg_over":
-            # bolt tip just above the hole: origin at seat + 30 mm (bolt is 25.4 mm long)
-            tgt = np.array([seat[0], seat[1], seat[2] + 0.030])
+            # bolt tip just above the hole: origin at seat + over_dz (default 30 mm; the bolt is 25.4 mm long)
+            tgt = np.array([seat[0], seat[1], seat[2] + self.over_dz])
             goal_pos, goal_R, ep, er = self.servo.step(leg_pos, leg_R, tgt, self._place_R, ee_pos, ee_R)
             if ep < 0.002 and leg_tilt_deg(leg_R) < 2.0 and er < np.radians(3.0):  # at the placement yaw too
                 self._goto("leg_lower")
@@ -511,7 +554,7 @@ class ServoOneLegPolicy:
             else:
                 # turn only: the hand yaws clockwise about the vertical through the leg's
                 # centre (tightening = -world yaw), tilt left as it is, pressing down a little
-                Rz = get_mat([0, 0, 0], [0, 0, -self.gain * self.rot_step])[:3, :3]
+                Rz = get_mat([0, 0, 0], [0, 0, -self.gain * self.screw_step])[:3, :3]
                 c = np.array([leg_pos[0], leg_pos[1], ee_pos[2]])
                 goal_pos = c + Rz @ (ee_pos - c)
                 # the press is relative to the leg (the grasp height minus press), so it does

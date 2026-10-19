@@ -119,7 +119,8 @@ def _parts_to_world(parts_flat: np.ndarray, R_mesh: np.ndarray) -> tuple:
 
 
 def load_demo(path: str | Path, frame: Optional[str] = None) -> Demo:
-    """Read one FurnitureBench ``.pkl`` into a :class:`Demo`."""
+    """Read one FurnitureBench ``.pkl`` into a :class:`Demo`. Its actions are the ones the env
+    was given: ``actions_executed`` when the pkl has them (a DART collection), else ``actions``."""
     path = Path(path)
     with open(path, "rb") as f:
         data: Dict[str, Any] = pickle.load(f)
@@ -127,7 +128,7 @@ def load_demo(path: str | Path, frame: Optional[str] = None) -> Demo:
     R_mesh = MESH_FRAMES[frame]
 
     obs = data["observations"]
-    acts = np.stack([_np(a) for a in data["actions"]])  # (T, 8)
+    acts = np.stack([_np(a) for a in data.get("actions_executed") or data["actions"]])  # (T, 8)
     T = acts.shape[0]
     if len(obs) not in (T, T + 1):
         raise ValueError(f"{path}: {len(obs)} observations for {T} actions")
@@ -229,14 +230,19 @@ def obstacle_tag_rot6d(front_pos_robot: Any) -> np.ndarray:
     return np.concatenate([pos_t, mat_to_rot6d(R_t)]).astype(np.float32)
 
 
-def fb_abs_frames(data: Dict[str, Any], obstacle: bool = False) -> tuple:
+def fb_abs_frames(data: Dict[str, Any], obstacle: bool = False, executed: bool = False) -> tuple:
     """A loaded pkl -> ``(states (T+1, 61), actions (T, 10))`` of the ``-FBAbs-v0`` interface
     (the last observation is repeated when the pkl holds none after the last action).
 
     ``obstacle``: append the front obstacle's pose (``obstacle_tag_rot6d``) to every state, 70
     wide (the ResiP task's layout), from the pkl's ``obstacles_robot`` -- or, for a pkl recorded
-    before the obstacles moved, their fixed pose ``frames.OBSTACLE_FRONT_POS``."""
-    obs, acts = data["observations"], data["actions"]
+    before the obstacles moved, their fixed pose ``frames.OBSTACLE_FRONT_POS``.
+
+    ``executed``: the actions the env was given (``actions_executed``, a DART collection's
+    perturbed commands; ``actions`` when the pkl has none) -- for replaying the episode. The
+    default is ``actions``: the expert's own commands, the labels BC trains on."""
+    obs = data["observations"]
+    acts = (data.get("actions_executed") or data["actions"]) if executed else data["actions"]
     T = len(acts)
     states = np.stack([fb_abs_state(o) for o in obs[: T + 1]])
     if states.shape[0] == T:

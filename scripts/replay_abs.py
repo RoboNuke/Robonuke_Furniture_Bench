@@ -126,7 +126,8 @@ def pkl_episodes(root: Path):
         demo = load_demo(path)
         with open(path, "rb") as f:
             data = pickle.load(f)
-        states, acts = fb_abs_frames(data, obstacle=OBSTACLE_OBS)
+        # what the env was given when the demo was recorded (a DART demo's perturbed commands)
+        states, acts = fb_abs_frames(data, obstacle=OBSTACLE_OBS, executed=True)
         # demos recorded with moving obstacles (furniture.obstacle_offset) carry where they were
         obstacles = data.get("obstacles_robot")
 
