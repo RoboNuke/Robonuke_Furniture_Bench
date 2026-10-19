@@ -189,6 +189,7 @@ class ServoOneLegPolicy:
         screw_upright: bool = False,
         screw_pivot: bool = False,
         pivot_step_deg: float | None = None,
+        pivot_dz: float = 0.0,
         insert_yaw_deg: float = 15.0,
         corner_clearance: float = -0.002,
         hover_dz: float = 0.04,
@@ -239,6 +240,9 @@ class ServoOneLegPolicy:
         #: the hole axis, and only then screw (see _hole_point / the 'screw_pivot' phase)
         self.screw_pivot = screw_pivot
         self.pivot_step = np.radians(rot_step_deg if pivot_step_deg is None else pivot_step_deg)
+        #: m: the whole pivot arc raised this far along the hole axis (the same arc, its centre
+        #: above the hole point), so the hand presses less on the hole; ramped in over 5 steps
+        self.pivot_dz = float(pivot_dz)
         #: the leg is carried over the hole and lowered at its yaw when it stood up plus this
         #: (deg, counter-clockwise seen from above = +world yaw), a fixed goal for the whole
         #: placement: turns the thread start away from the yaw that cross-threads
@@ -479,7 +483,10 @@ class ServoOneLegPolicy:
                 d = ee_pos - P
                 self._pivot = (float(np.linalg.norm(d)), d / np.linalg.norm(d), ee_R.copy())
             r0, u0, R0 = self._pivot
-            u = (ee_pos - P) / max(float(np.linalg.norm(ee_pos - P)), 1e-9)
+            # the arc's centre: the hole point, raised by pivot_dz (ramped in over 5 steps);
+            # the radius and start direction stay the grasp's, so it is the same arc, higher
+            C = P + h * self.pivot_dz * min(1.0, self.phase_steps / 5.0)
+            u = (ee_pos - C) / max(float(np.linalg.norm(ee_pos - C)), 1e-9)
             total = float(np.arccos(np.clip(u0 @ h, -1.0, 1.0)))  # u0 -> h, the whole arc
             left = float(np.arccos(np.clip(u @ h, -1.0, 1.0)))  # where the hand is on it
             if left < np.radians(1.0) or total < np.radians(1.0) or self.phase_steps > 40:
@@ -490,7 +497,7 @@ class ServoOneLegPolicy:
                 # the next point along the great circle u0 -> h, one step past where the hand is
                 done_ang = min(total, total - left + self.gain * self.pivot_step)
                 R_arc = rotvec_to_mat(np.cross(u0, h) / np.linalg.norm(np.cross(u0, h)) * done_ang)
-                goal_pos = P + r0 * (R_arc @ u0)
+                goal_pos = C + r0 * (R_arc @ u0)
                 goal_R = R_arc @ R0
         elif self.phase == "screw":
             self._leg_yaw_u = unwrap(self._leg_yaw_u, leg_yaw(leg_R))

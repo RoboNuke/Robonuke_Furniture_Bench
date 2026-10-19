@@ -55,6 +55,8 @@ parser.add_argument("--insert_rate", type=float, default=0.002, help="m per step
 parser.add_argument("--screw_press", type=float, default=0.002, help="m pressed on the thread per step while screwing (upstream 0.005; 0.002 sorted best)")
 parser.add_argument("--screw_pivot", action="store_true",
                     help="servo: regrasp along the leaning leg's axis (centre to hole entry), turn hand+leg about the hole point until upright, then screw")
+parser.add_argument("--pivot_dz", type=float, default=0.0,
+                    help="servo: m the --screw_pivot arc is raised along the hole axis (same arc, presses less on the hole)")
 parser.add_argument("--pivot_speed", type=float, default=None, help="servo: deg/s cap on that pivot (default: --rot_speed)")
 parser.add_argument("--timeout", type=int, default=600, help="upstream's scripted_timeout for one_leg")
 parser.add_argument("--save_failure", action="store_true", help="keep failed attempts (pkl + video) under fails/")
@@ -351,6 +353,7 @@ def main() -> None:
                 release_dz=args.release_dz,
                 screw_upright=args.screw_upright,
                 screw_pivot=args.screw_pivot,
+                pivot_dz=args.pivot_dz,
                 pivot_step_deg=None if args.pivot_speed is None else args.pivot_speed * env.step_dt,
                 insert_yaw_deg=args.insert_yaw,
                 upright_step_deg=None if args.upright_speed is None else args.upright_speed * env.step_dt,

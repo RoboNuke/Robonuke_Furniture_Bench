@@ -145,7 +145,8 @@ top's upper face, `ServoOneLegPolicy._hole_point`), not any measured contact. On
 close, the hand swings on an arc about that hole point: it keeps the distance from the hole
 point it had at the grasp (so it neither presses down nor pulls out) and turns with the arc
 until it is straight above the hole (`screw_pivot` phase, at most `--pivot_speed` deg/s, 40
-steps at most); only then does the screw turn begin. Everything it uses (the leg's and the top's poses) is in the policy
+steps at most); only then does the screw turn begin. `--pivot_dz` raises that same arc along the
+hole axis (its centre above the hole point, ramped in over 5 steps), so the hand presses less. Everything it uses (the leg's and the top's poses) is in the policy
 observation. `--screw_press` defaults to 0.002 (the press sweep's best failure mix).
 
 ### Sorting failed attempts

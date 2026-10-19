@@ -212,3 +212,27 @@ def test_servo_policy_with_screw_pivot_still_assembles_in_the_ideal_world():
         w.step(a)
     assert a.done and pol.assembled(w.state()), phases
     assert "screw_pivot" in phases
+
+
+def test_pivot_dz_raises_the_same_arc():
+    """--pivot_dz: once ramped in, the target is the dz=0 arc's, raised dz along the hole axis."""
+    def target(dz):
+        w = IdealWorld()
+        pol = sv.ServoOneLegPolicy(seed=0, screw_pivot=True, gain=1.0, pivot_dz=dz)
+        top = w.parts["square_table_top"]
+        P, h = pol._hole_point(top)
+        ax = np.cross(h, [1.0, 0.0, 0.0])
+        lean = sv.rotvec_to_mat(ax / np.linalg.norm(ax) * np.radians(10))
+        c = P + lean @ (h * 0.03)
+        w.parts["square_table_leg4"] = sp.hom(lean @ sv.LEG_UP, c)
+        w.ee = sp.hom(lean @ sp.rot_mat((np.pi, 0, 0)), c)
+        w.width = 0.03
+        pol.phase, pol.gripper = "screw_pivot", 1.0
+        pol.act(w.state())  # the plan, at the grasp
+        pol.phase_steps = 10  # past the ramp, the hand raised with it
+        w.ee = sp.hom(w.ee[:3, :3], c + dz * h)
+        return pol.act(w.state()).goal_pos, h
+
+    g0, h = target(0.0)
+    g3, _ = target(0.003)
+    np.testing.assert_allclose(g3 - g0, 0.003 * h, atol=2e-4)
