@@ -141,10 +141,11 @@ the EE error against the demo. The success rate is the ceiling a perfect clone r
 
 A leg released leaning in its hole is regrasped with the hand's axis along the leg's *assumed*
 axis -- the line from the leg's centre to the hole's entry point (the hole axis meeting the
-top's upper face, `ServoOneLegPolicy._hole_point`), not any measured contact -- and hand and
-leg are then turned together about that hole point, which is held still, until the line is on
-the hole axis (`screw_pivot` phase, at most `--pivot_speed` deg/s, 40 steps at most); only then
-does the screw turn begin. Everything it uses (the leg's and the top's poses) is in the policy
+top's upper face, `ServoOneLegPolicy._hole_point`), not any measured contact. Once the fingers
+close, the hand swings on an arc about that hole point: it keeps the distance from the hole
+point it had at the grasp (so it neither presses down nor pulls out) and turns with the arc
+until it is straight above the hole (`screw_pivot` phase, at most `--pivot_speed` deg/s, 40
+steps at most); only then does the screw turn begin. Everything it uses (the leg's and the top's poses) is in the policy
 observation. `--screw_press` defaults to 0.002 (the press sweep's best failure mix).
 
 ### Sorting failed attempts

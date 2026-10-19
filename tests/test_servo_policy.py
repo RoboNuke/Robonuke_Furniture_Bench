@@ -181,8 +181,12 @@ def test_screw_pivot_turns_about_the_hole_point_toward_the_hole_axis():
     pol.phase, pol.gripper = "screw_pivot", 1.0
     a = pol.act(w.state())
     a0, _, _ = pol._leg_line(leg_c, top)
-    # the commanded hand pose is the current one turned about P: same distance to P ...
+    # the commanded hand pose stays at the grasp's distance from P ...
     assert abs(np.linalg.norm(a.goal_pos - P) - np.linalg.norm(leg_c - P)) < 1e-9
+    # ... also from a hand that has sunk 5 mm toward P: the plan keeps the grasp radius
+    w.ee = sp.hom(w.ee[:3, :3], leg_c - 0.005 * (leg_c - P) / np.linalg.norm(leg_c - P))
+    b = pol.act(w.state())
+    assert abs(np.linalg.norm(b.goal_pos - P) - np.linalg.norm(leg_c - P)) < 1e-9
     # ... and the line from P to it is closer to the hole axis than the leg's was
     new = (a.goal_pos - P) / np.linalg.norm(a.goal_pos - P)
     assert np.arccos(np.clip(new @ h, -1, 1)) < np.arccos(np.clip(a0 @ h, -1, 1)) - 1e-3
