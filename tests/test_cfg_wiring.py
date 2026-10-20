@@ -238,6 +238,7 @@ def test_resip_sim_cfgs(cfg_module):
         assert cfg.scene.robot.actuators["panda_hand"].stiffness == 600.0 and cfg.scene.robot.actuators["panda_hand"].damping == 40.0
         arm = cfg.actions.fb.arm if hasattr(cfg.actions, "fb") else cfg.actions.arm
         assert arm.controller.use_relative_mode is (not absolute) and arm.controller.ik_method == "pinv"
+        assert arm.class_type.__name__ == "TcpDifferentialIKAction"  # the TCP Jacobian fixed
         assert arm.body_offset.pos == cfg_module.EE_OFFSET
     # the ResiP FBAbs observation: the parts in the robot-base frame, then the front obstacle's x, y (63)
     resip = cfg_module.OneLegFBAbsResiPEnvCfg()

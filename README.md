@@ -161,6 +161,18 @@ a new collection needs a new `--seed` or it repeats the same starts.
 Collect demo sets meant for training under `datasets/` in this repo (git-ignored), one folder per
 set, e.g. `--out_dir datasets/pivot_vary_dart`; not under `/tmp`.
 
+### The TCP Jacobian (ResiP's differential IK)
+
+Isaac Lab's differential-IK term builds the TCP's Jacobian from the hand's by adding the
+`body_offset` lever (0.1034 m along the hand's z) -- but in the hand's frame, on a root-frame
+Jacobian. With the hand pointing down that puts the TCP 10 cm *above* the hand, so every tilting
+command drags the TCP sideways by ~0.207 m x the angle until the next solve corrects it (pure yaw
+is unaffected). ResiP's sim reads the TCP link's (`k_ee_link`) Jacobian from the physics engine
+and has no such error. The ResiP tasks' arm term is `mdp.tcp_ik.TcpDifferentialIKAction`: Isaac
+Lab's term with the lever rotated into the root frame (`furniture_lab/tcp_jacobian.py`, checked
+against finite differences of a 7-joint arm's TCP). Isaac Lab's OSC term has the same lever in
+`_compute_ee_jacobian`; the port's OSC tasks are not changed.
+
 ### Free-hand steps and the ResiP observation
 
 * The servo expert's free-hand states (upstream's: reaching the top and the leg, the regrasp)

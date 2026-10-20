@@ -505,10 +505,13 @@ RESIP_GRIPPER_SPEED = 0.2
 
 def dik_arm_cfg(absolute: bool) -> DifferentialInverseKinematicsActionCfg:
     """ResiP's arm controller as an Isaac Lab term: differential IK (least squares,
-    ``pinv``) of FurnitureBench's EE frame to joint position targets. Relative: the 6-d
+    ``pinv``) of FurnitureBench's EE frame to joint position targets, with the TCP Jacobian
+    fixed (``mdp.tcp_ik.TcpDifferentialIKAction``). Relative: the 6-d
     ``[dpos, axis-angle]`` in the base frame, scaled like the OSC term (an action of 1 is
     2.5 cm / 0.1 rad); absolute: the 7-d target ``[pos, quat wxyz]`` in the base frame."""
-    return DifferentialInverseKinematicsActionCfg(
+    from .mdp.tcp_ik import TcpDifferentialIKAction
+
+    cfg = DifferentialInverseKinematicsActionCfg(
         asset_name="robot",
         joint_names=["panda_joint.*"],
         body_name="panda_hand",
@@ -516,6 +519,10 @@ def dik_arm_cfg(absolute: bool) -> DifferentialInverseKinematicsActionCfg:
         controller=DifferentialIKControllerCfg(command_type="pose", use_relative_mode=not absolute, ik_method="pinv"),
         scale=1.0 if absolute else (0.025, 0.025, 0.025, 0.1, 0.1, 0.1),
     )
+    # Isaac Lab's term puts the TCP offset's lever in the hand frame on a root-frame Jacobian;
+    # this one rotates it into the root frame (the Jacobian ResiP's k_ee_link gives)
+    cfg.class_type = TcpDifferentialIKAction
+    return cfg
 
 
 def apply_resip(cfg) -> None:
