@@ -64,9 +64,10 @@ def test_the_draw_stays_in_its_ranges_and_zero_width_is_the_fixed_expert():
 
 
 def test_the_top_grasp_slides_along_its_edge():
-    def first_target(along):
+    def first_target(along):  # upstream's grasp target (the command only steps toward it)
         pol = sv.ServoOneLegPolicy(seed=0, noise=False, top_grasp_along=along)
-        return pol.act(IdealWorld().state()).goal_pos
+        pol.act(IdealWorld().state())
+        return pol.top.target[:3, 3]
 
     d = first_target(0.03) - first_target(0.0)
     assert np.linalg.norm(d) == pytest.approx(0.03, abs=1e-6)

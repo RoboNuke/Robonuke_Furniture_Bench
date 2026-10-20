@@ -125,7 +125,7 @@ def test_obstacle_tag_rot6d_is_the_front_obstacle_in_the_tag_frame():
     np.testing.assert_allclose(demos.rot6d_to_mat(o[3:9]), frames.TAG_ROT_W.T, atol=1e-6)
 
 
-def test_fb_abs_frames_appends_the_recorded_obstacle(tmp_path):
+def test_fb_abs_frames_resip_layout_is_the_base_frame_with_the_obstacle_xy(tmp_path):
     path = tmp_path / "d.pkl"
     _fake_pkl(path, T=3)
     data = pickle.load(open(path, "rb"))
@@ -134,10 +134,20 @@ def test_fb_abs_frames_appends_the_recorded_obstacle(tmp_path):
         o["robot_state"].setdefault("ee_ori_vel", np.zeros(3, np.float32))
     s61, _ = demos.fb_abs_frames(data)
     old, _ = demos.fb_abs_frames(data, obstacle=True)  # no obstacles_robot: the fixed pose
-    assert s61.shape[1] == 61 and old.shape[1] == 70
-    np.testing.assert_allclose(old[:, :61], s61)
-    np.testing.assert_allclose(old[0, 61:], demos.obstacle_tag_rot6d(frames.OBSTACLE_FRONT_POS))
+    assert s61.shape[1] == 61 and old.shape[1] == 63
+    np.testing.assert_allclose(old[:, :16], s61[:, :16])
+    # every part: the tag-frame pose of the 61 layout, moved into the robot-base frame
+    T_tw = np.eye(4)
+    T_tw[:3, :3], T_tw[:3, 3] = frames.TAG_ROT_W, frames.TAG_POS_W
+    for i in range(5):
+        tag, base = s61[0, 16 + 9 * i : 25 + 9 * i], old[0, 16 + 9 * i : 25 + 9 * i]
+        T = np.eye(4)
+        T[:3, :3], T[:3, 3] = demos.rot6d_to_mat(tag[3:9]), tag[:3]
+        want = T_tw @ T
+        np.testing.assert_allclose(base[:3], want[:3, 3], atol=1e-5)
+        np.testing.assert_allclose(demos.rot6d_to_mat(base[3:9]), want[:3, :3], atol=1e-5)
+    np.testing.assert_allclose(old[0, 61:], np.asarray(frames.OBSTACLE_FRONT_POS)[:2], atol=1e-6)
     moved = np.asarray(frames.OBSTACLE_FRONT_POS) + np.array([0.01, -0.02, 0.0])
     data["obstacles_robot"] = {"obstacle_front": moved}
     new, _ = demos.fb_abs_frames(data, obstacle=True)
-    np.testing.assert_allclose(new[-1, 61:], demos.obstacle_tag_rot6d(moved))
+    np.testing.assert_allclose(new[-1, 61:], moved[:2], atol=1e-6)

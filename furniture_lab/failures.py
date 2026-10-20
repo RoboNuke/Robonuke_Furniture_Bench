@@ -138,7 +138,8 @@ def load_attempt(path: str | Path) -> Attempt:
 
 def load_trace(path: str | Path) -> Attempt:
     """One ``scripts/replay_abs.py --save`` trace (.npz) -> an :class:`Attempt`: this sim's
-    replay of a demo, read from its FBAbs observations (61, or 70 with the obstacle pose) and
+    replay of a demo, read from its FBAbs observations (61, parts in the tag frame; or the ResiP
+    task's 63, parts in the robot-base frame and the front obstacle's x, y after them) and
     the absolute actions sent (gripper ``> 0`` closes). Index t is the state before action t,
     as in a pkl: ``start_obs`` then ``obs_here``. The wrench is there for traces saved since
     ``robot_snapshot`` records ``ee_wrench``."""
@@ -149,14 +150,18 @@ def load_trace(path: str | Path) -> Attempt:
     obs = obs[: T + 1]
     names = list(D.PART_NAMES)
 
-    def part(i: int) -> np.ndarray:
+    resip = obs.shape[1] == 63  # the ResiP task: base-frame parts, then the front obstacle's x, y
+    to_tag = np.linalg.inv(_hom(frames.TAG_ROT_W, np.asarray(frames.TAG_POS_W)))
+
+    def part(i: int) -> np.ndarray:  # tag frame, as a pkl's (classify reads that)
         block = obs[:, 16 + 9 * i : 16 + 9 * (i + 1)]
-        return np.stack([_hom(D.rot6d_to_mat(b[3:9]), b[:3]) for b in block])
+        T_p = [_hom(D.rot6d_to_mat(b[3:9]), b[:3]) for b in block]
+        return np.stack([to_tag @ T for T in T_p] if resip else T_p)
 
     obstacles = {"obstacle_front": np.asarray(frames.OBSTACLE_FRONT_POS), **{k: np.asarray(v) for k, v in frames.OBSTACLE_SIDE_POS.items()}}
-    if obs.shape[1] >= 70:  # the ResiP task observes the front obstacle (tag frame): place all three
-        front = np.asarray(frames.TAG_POS_W) + frames.TAG_ROT_W @ obs[0, 61:64].astype(np.float64)
-        base = np.asarray(frames.OBSTACLE_FRONT_POS)
+    if resip:  # place all three where the front one was (they slide together)
+        base = np.asarray(frames.OBSTACLE_FRONT_POS, dtype=np.float64)
+        front = np.array([obs[0, 61], obs[0, 62], base[2]], dtype=np.float64)
         obstacles = {k: v - base + front for k, v in obstacles.items()}
     wrench = None
     if "ee_wrench" in z.files:

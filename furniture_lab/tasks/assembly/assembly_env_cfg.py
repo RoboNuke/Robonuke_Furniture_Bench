@@ -413,16 +413,18 @@ FBABS_OBS_LAYOUT = (("ee_pos", 3), ("ee_rot6d", 6), ("ee_pos_vel", 3), ("ee_ori_
 FBABS_OBS_DIM = sum(w for _, w in FBABS_OBS_LAYOUT)
 #: ``[goal_pos 3 (base frame), goal_rot6d 6, gripper]``
 FBABS_ACTION_DIM = 10
-#: the ResiP ``-FBAbs-ResiP-v0`` observation: ``FBABS_OBS_LAYOUT`` then the front obstacle's
-#: tag-frame ``[pos 3, rot6d 6]`` (ResiP's policies observe it; it moves per episode there), 70
-FBABS_RESIP_OBS_LAYOUT = FBABS_OBS_LAYOUT + (("obstacle_pose", 9),)
+#: the ResiP ``-FBAbs-ResiP-v0`` observation, every pose in the robot-base frame: the robot state
+#: of ``FBABS_OBS_LAYOUT``, the parts in the base frame (``parts_poses_b``: the same 5 x ``[pos,
+#: rot6d]``, not the tag frame), then the front obstacle's base-frame x, y (it slides per episode;
+#: its z and rotation never change), 63
+FBABS_RESIP_OBS_LAYOUT = FBABS_OBS_LAYOUT[:-1] + (("parts_poses_b", 45), ("obstacle_xy", 2))
 
 
 def fbabs_obs_layout(env_cfg) -> tuple:
     """The ``-FBAbs-`` observation layout of ``env_cfg``: with the obstacle term when its policy
     group has one (the ResiP task), else ``FBABS_OBS_LAYOUT``."""
     policy = getattr(getattr(env_cfg, "observations", None), "policy", None)
-    return FBABS_RESIP_OBS_LAYOUT if getattr(policy, "obstacle_pose", None) is not None else FBABS_OBS_LAYOUT
+    return FBABS_RESIP_OBS_LAYOUT if getattr(policy, "obstacle_xy", None) is not None else FBABS_OBS_LAYOUT
 
 
 def abs_arm_cfg() -> OperationalSpaceControllerActionCfg:
@@ -459,11 +461,13 @@ class FBAbsObservationsCfg:
 
 @configclass
 class FBAbsResiPObservationsCfg:
-    """``FBAbsObservationsCfg`` plus the front obstacle's pose (``FBABS_RESIP_OBS_LAYOUT``, 70)."""
+    """``FBAbsObservationsCfg`` with every pose in the robot-base frame -- the parts in it too, not
+    the tag frame -- plus the front obstacle's base-frame x, y (``FBABS_RESIP_OBS_LAYOUT``, 63)."""
 
     @configclass
     class PolicyCfg(FBAbsObservationsCfg.PolicyCfg):
-        obstacle_pose = ObsTerm(func=mdp.obstacle_pose_tag_rot6d)
+        parts_poses = ObsTerm(func=mdp.parts_poses_b_rot6d)
+        obstacle_xy = ObsTerm(func=mdp.obstacle_xy_b)
 
     policy: PolicyCfg = PolicyCfg()
 
@@ -563,8 +567,8 @@ class OneLegFBResiPEnvCfg(OneLegFBEnvCfg):
 
 @configclass
 class OneLegFBAbsResiPEnvCfg(OneLegFBAbsEnvCfg):
-    """ResiP's interface (absolute rot6d targets, rot6d observation with the front obstacle's
-    pose: 70) in ResiP's sim."""
+    """ResiP's interface (absolute rot6d targets; rot6d observation, every pose in the robot-base
+    frame, with the front obstacle's x, y: 63) in ResiP's sim."""
 
     observations: FBAbsResiPObservationsCfg = FBAbsResiPObservationsCfg()
 
@@ -586,7 +590,7 @@ class FBAbsHybridActionsCfg:
 class OneLegFBAbsResiPHybridEnvCfg(OneLegFBAbsResiPEnvCfg):
     """ResiP's sim and interface with the arm on robonuke_rl_core's hybrid force/position law
     (``mdp/hybrid.py``) instead of differential IK into stiff joint PD: everything else is
-    ``OneLegFBAbsResiPEnvCfg``'s (10 Hz, friction, gripper, observation 61). The arm's drives get
+    ``OneLegFBAbsResiPEnvCfg``'s (10 Hz, friction, gripper, observation 63). The arm's drives get
     no stiffness or damping, so the term's joint torques are all that moves it. The controller
     starts at ``mdp.hybrid.RESIP_TRACKING_GAINS`` (inertial decoupling on, K / D tuned so the EE
     tracks targets as ResiP's IK + joint PD does; the force branch with its feedforward). The

@@ -35,7 +35,7 @@ from .tasks.furniture.square_table import MESH_FRAMES, PART_NAMES, mesh_frame
 
 __all__ = [
     "Demo", "load_demo", "quat_xyzw_to_wxyz", "quat_to_mat", "mat_to_quat",
-    "mat_to_rot6d", "rot6d_to_mat", "resip_unscale_rotation", "FB_STATE_KEYS", "fb_state", "fb_abs_state", "fb_abs_action", "fb_abs_frames", "obstacle_tag_rot6d",
+    "mat_to_rot6d", "rot6d_to_mat", "resip_unscale_rotation", "FB_STATE_KEYS", "fb_state", "fb_abs_state", "fb_abs_action", "fb_abs_frames", "obstacle_tag_rot6d", "resip_abs_states",
 ]
 
 #: FurnitureBench's DEFAULT_STATE_OBS keys of ``robot_state``, in order (then ``parts_poses``)
@@ -221,6 +221,27 @@ def fb_abs_action(obs: Dict[str, Any], action: Any) -> np.ndarray:
     return np.concatenate([goal_pos, mat_to_rot6d(R_goal), a[7:8]]).astype(np.float32)
 
 
+def resip_abs_states(robot_state: np.ndarray, parts_tag_xyzw: np.ndarray, front_robot: Any) -> np.ndarray:
+    """The ResiP task's observation (``FBABS_RESIP_OBS_LAYOUT``, 63) from recorded data, every pose
+    in the robot-base frame -- ``mdp.parts_poses_b_rot6d`` / ``mdp.obstacle_xy_b``'s NumPy twin.
+
+    ``robot_state`` ``(T, 16)``: ``[ee_pos, ee_rot6d, ee_pos_vel, ee_ori_vel, gripper_width]``
+    (base frame); ``parts_tag_xyzw`` ``(T, 7 P)``: each part's ``[pos, quat xyzw]`` in the
+    AprilTag frame (what pkls and ResiP's zarr hold); ``front_robot``: the front obstacle's
+    base-frame position, ``(3,)`` or ``(T, 3)`` (only x, y are kept).
+    Returns ``(T, 16 + 9 P + 2)``: the robot state, each part ``[pos 3, rot6d 6]`` (base frame),
+    the obstacle's x, y."""
+    robot_state = np.asarray(robot_state, dtype=np.float64)
+    T = robot_state.shape[0]
+    parts = np.asarray(parts_tag_xyzw, dtype=np.float64).reshape(T, -1, 7)
+    R_tw, p_tw = frames.TAG_ROT_W, np.asarray(frames.TAG_POS_W)
+    pos_b = p_tw + parts[..., :3] @ R_tw.T
+    rot_b = np.stack([[mat_to_rot6d(R_tw @ quat_to_mat(quat_xyzw_to_wxyz(q))) for q in row] for row in parts[..., 3:7]])
+    front = np.broadcast_to(np.asarray(front_robot, dtype=np.float64), (T, 3))
+    out = np.concatenate([robot_state, np.concatenate([pos_b, rot_b], axis=-1).reshape(T, -1), front[:, :2]], axis=1)
+    return out.astype(np.float32)
+
+
 def obstacle_tag_rot6d(front_pos_robot: Any) -> np.ndarray:
     """The front obstacle at ``front_pos_robot`` (robot-base frame; the box is never rotated)
     -> its tag-frame ``[pos 3, rot6d 6]`` (9): the ``obstacle_pose`` observation of the ResiP
@@ -234,9 +255,10 @@ def fb_abs_frames(data: Dict[str, Any], obstacle: bool = False, executed: bool =
     """A loaded pkl -> ``(states (T+1, 61), actions (T, 10))`` of the ``-FBAbs-v0`` interface
     (the last observation is repeated when the pkl holds none after the last action).
 
-    ``obstacle``: append the front obstacle's pose (``obstacle_tag_rot6d``) to every state, 70
-    wide (the ResiP task's layout), from the pkl's ``obstacles_robot`` -- or, for a pkl recorded
-    before the obstacles moved, their fixed pose ``frames.OBSTACLE_FRONT_POS``.
+    ``obstacle``: the ResiP task's layout instead (63, :func:`resip_abs_states`): the parts in
+    the robot-base frame and the front obstacle's base-frame x, y from the pkl's
+    ``obstacles_robot`` -- or, for a pkl recorded before the obstacles moved, its fixed
+    position ``frames.OBSTACLE_FRONT_POS``.
 
     ``executed``: the actions the env was given (``actions_executed``, a DART collection's
     perturbed commands; ``actions`` when the pkl has none) -- for replaying the episode. The
@@ -249,7 +271,10 @@ def fb_abs_frames(data: Dict[str, Any], obstacle: bool = False, executed: bool =
         states = np.concatenate([states, states[-1:]])
     if obstacle:
         front = (data.get("obstacles_robot") or {}).get("obstacle_front", frames.OBSTACLE_FRONT_POS)
-        states = np.concatenate([states, np.tile(obstacle_tag_rot6d(front), (states.shape[0], 1))], axis=1)
+        parts = np.stack([_f32(o["parts_poses"]) for o in obs[: T + 1]])
+        if parts.shape[0] == T:
+            parts = np.concatenate([parts, parts[-1:]])
+        states = resip_abs_states(states[:, :16], parts, front)
     actions = np.stack([fb_abs_action(obs[t], acts[t]) for t in range(T)])
     return states, actions
 

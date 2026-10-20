@@ -236,3 +236,31 @@ def test_pivot_dz_raises_the_same_arc():
     g0, h = target(0.0)
     g3, _ = target(0.003)
     np.testing.assert_allclose(g3 - g0, 0.003 * h, atol=2e-4)
+
+
+def test_free_hand_commands_stay_within_the_per_step_limits():
+    """Upstream's free-hand states give a target, not a step: the hand is commanded toward it
+    at most gain x pos_step / gain x the free-hand turn per step (no doubling, no jumps)."""
+    import test_servo_policy as T
+
+    osc = T.OSC_FRACTION
+    for gain, fraction in ((5.0, osc), (1.0, 1.0)):  # the port's OSC; ResiP's DIK closes it all
+        T.OSC_FRACTION = fraction
+        try:
+            w = IdealWorld()
+            pol = sv.ServoOneLegPolicy(seed=0, gain=gain, pos_step=0.016, rot_step_deg=9.0, wind_step_deg=18.0)
+            free = 0
+            for _ in range(3000):
+                s = w.state()
+                a = pol.act(s)
+                if a.done:
+                    break
+                if pol.phase in ("top_free", "leg_free", "regrasp_free"):
+                    free += 1
+                    assert np.linalg.norm(a.delta_pos) <= gain * 0.016 + 1e-9
+                    turn = np.degrees(np.linalg.norm(sv.mat_to_rotvec(sp.quat_to_mat(a.delta_quat))))
+                    assert turn <= gain * 18.0 + 1e-6
+                w.step(a)
+            assert free > 50 and a.done and pol.assembled(w.state()), (gain, pol.phase)
+        finally:
+            T.OSC_FRACTION = osc

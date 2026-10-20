@@ -161,6 +161,19 @@ a new collection needs a new `--seed` or it repeats the same starts.
 Collect demo sets meant for training under `datasets/` in this repo (git-ignored), one folder per
 set, e.g. `--out_dir datasets/pivot_vary_dart`; not under `/tmp`.
 
+### Free-hand steps and the ResiP observation
+
+* The servo expert's free-hand states (upstream's: reaching the top and the leg, the regrasp)
+  take upstream's target but step toward it within the same per-step limits as the held
+  phases: at most `--pos_speed` of translation and `--wind_speed` of rotation per step (a
+  command `gain` x that). Upstream doubled the error (x1.5 past 3 cm, up to 11.5 cm) and turned
+  in one jump, which ResiP's IK -- closing the whole command each step -- turned into overshoot
+  and a violent wrist swing, and which made every free-hand label a point 2-3x past the target.
+* The ResiP task (`-FBAbs-ResiP-v0`) observes every pose in the robot-base frame: the robot
+  state, the five parts (`mdp.parts_poses_b_rot6d`, not the AprilTag frame), then the front
+  obstacle's x, y (`mdp.obstacle_xy_b`; its z and rotation never change): 63 wide
+  (`FBABS_RESIP_OBS_LAYOUT`; `demos.resip_abs_states` builds it from pkls and ResiP's zarr).
+
 ### Demo variety (`--vary`, `--dart_prob`)
 
 Fifty demos from one fixed expert follow one corridor through the task, and BC clones that
@@ -212,9 +225,10 @@ FB action terms' gripper hysteresis (`furniture.gripper_margin` 0.019: the comma
 clear sign change), the three obstacles moved together at every reset by a uniform (x, y)
 offset of up to ±2 cm (`furniture.obstacle_offset` 0.02, ResiP's low randomness; 0 elsewhere,
 i.e. the fixed poses), and 70 s episodes (their 700-step cap). `-FBAbs-ResiP-v0` also
-observes the front obstacle's pose after the parts, as ResiP's policies do (their
-`parts_poses` is 42 wide): `obstacle_pose`, tag-frame `[pos 3, rot6d 6]`, so the observation
-is 70 (`FBABS_RESIP_OBS_LAYOUT`; `fbabs_obs_layout(cfg)` picks the layout of a cfg). The demo collector reads where
+observes the front obstacle after the parts, as ResiP's policies do (their `parts_poses` is
+42 wide) -- here only its base-frame x, y (`obstacle_xy`), and the parts in the base frame
+too, so the observation is 63 (`FBABS_RESIP_OBS_LAYOUT`; `fbabs_obs_layout(cfg)` picks the
+layout of a cfg). The demo collector reads where
 the obstacles are each episode, so the top is pushed into that episode's corner, and saves
 their positions in the pkl (`obstacles_robot`); `replay_abs.py` puts them back (a pkl without
 them was recorded with the obstacles at their fixed poses, and replays there). Demos for them:

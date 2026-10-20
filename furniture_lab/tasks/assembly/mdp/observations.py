@@ -124,6 +124,35 @@ def parts_poses_tag_rot6d(env: "ManagerBasedRLEnv") -> torch.Tensor:
     return torch.cat([pos_t, quat_to_rot6d(quat_o)], dim=-1).reshape(N, 9 * P)
 
 
+def parts_poses_b_rot6d(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """Every part's OBJ-frame pose in the robot-base frame (the EE's frame) as ``(N, 9 P)`` of
+    ``[pos 3, rot6d 6]``: ``parts_poses_tag_rot6d``'s parts, in the base frame instead of the
+    AprilTag frame (``demos.resip_abs_states`` is its NumPy twin)."""
+    from ...furniture import frames
+    from ...furniture.square_table import MESH_FRAMES
+    from .rot6d import quat_to_rot6d
+
+    pos_b, quat_b = parts_pose_b(env)  # USD mesh frames, robot-base frame, wxyz
+    N, P = pos_b.shape[:2]
+    q_mesh = torch.tensor(
+        frames.mat_to_quat_wxyz(MESH_FRAMES[env.cfg.furniture.mesh_frame]), device=pos_b.device, dtype=pos_b.dtype
+    )
+    # USD frame -> OBJ frame: R_obj = R_usd @ R_mesh (the origins coincide)
+    quat_o = canonical_quat(quat_mul(quat_b.reshape(-1, 4), q_mesh.expand(N * P, -1)))
+    return torch.cat([pos_b, quat_to_rot6d(quat_o).reshape(N, P, 6)], dim=-1).reshape(N, 9 * P)
+
+
+def obstacle_xy_b(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """The front obstacle's x, y in the robot-base frame, ``(N, 2)``: all that changes about it
+    (``furniture.obstacle_offset`` slides the three together; their z and rotation are fixed)."""
+    robot = env.scene["robot"]
+    obstacle = env.scene["obstacle_front"]
+    pos_b, _ = subtract_frame_transforms(
+        robot.data.root_pos_w, robot.data.root_quat_w, obstacle.data.root_pos_w, obstacle.data.root_quat_w
+    )
+    return pos_b[:, :2]
+
+
 def ee_rot6d(
     env: "ManagerBasedRLEnv",
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="panda_hand"),

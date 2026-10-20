@@ -89,7 +89,7 @@ from furniture_lab.demos import (  # noqa: E402
     load_demo,
     mat_to_rot6d,
     quat_to_mat,
-    obstacle_tag_rot6d,
+    resip_abs_states,
     quat_xyzw_to_wxyz,
     resip_unscale_rotation,
 )
@@ -108,8 +108,8 @@ SL, _s = {}, 0
 for _name, _w in FBABS_OBS_LAYOUT:
     SL[_name] = slice(_s, _s + _w)
     _s += _w
-#: the task observes the front obstacle's pose after the parts (the ResiP task: 70 wide); set
-#: in main() from the task's cfg, before the episodes are read
+#: the task is the ResiP one (63 wide): its parts are in the robot-base frame and the front
+#: obstacle's x, y follow them; set in main() from the task's cfg, before the episodes are read
 OBSTACLE_OBS = False
 
 
@@ -148,13 +148,12 @@ def zarr_states_abs(robot_state: np.ndarray, parts: np.ndarray) -> np.ndarray:
     return np.concatenate([robot_state, np.concatenate([p[:, :, :3], rot], axis=-1).reshape(T, 45)], axis=-1).astype(np.float32)
 
 
-def _obstacle_states(front_tag, T: int) -> np.ndarray:
-    """(T, 9) ``obstacle_pose`` rows: the recorded tag-frame front-obstacle positions (or this
-    scene's fixed one for ``None``) as ``demos.obstacle_tag_rot6d`` gives them."""
+def _front_robot(front_tag, T: int) -> np.ndarray:
+    """(T, 3) base-frame front-obstacle positions from the recorded tag-frame ones (or this
+    scene's fixed one for ``None``)."""
     if front_tag is None:
-        return np.tile(obstacle_tag_rot6d(OBSTACLE_FRONT_POS), (T, 1))
-    robot = np.asarray(TAG_POS_W) + np.asarray(front_tag, dtype=np.float64) @ TAG_ROT_W.T
-    return np.stack([obstacle_tag_rot6d(p) for p in robot])
+        return np.tile(np.asarray(OBSTACLE_FRONT_POS, dtype=np.float64), (T, 1))
+    return np.asarray(TAG_POS_W) + np.asarray(front_tag, dtype=np.float64) @ TAG_ROT_W.T
 
 
 def check_obstacle(recorded_tag: np.ndarray) -> None:
@@ -202,10 +201,11 @@ def zarr_episodes(path: Path):
         if args.max_demos and n >= args.max_demos:
             break
         n += 1
-        states = zarr_states_abs(robot_state[lo:hi], parts[lo:hi])
-        if OBSTACLE_OBS:  # the recorded position; the rotation is this scene's (a constant)
+        if OBSTACLE_OBS:  # the ResiP task: base-frame parts and the recorded obstacle's x, y
             front_tag = obstacles[lo:hi] if obstacles is not None else None
-            states = np.concatenate([states, _obstacle_states(front_tag, hi - lo)], axis=1)
+            states = resip_abs_states(robot_state[lo:hi], parts[lo:hi], _front_robot(front_tag, hi - lo))
+        else:
+            states = zarr_states_abs(robot_state[lo:hi], parts[lo:hi])
         acts = actions[lo:hi].copy()
         # ResiP's processing shrank the episode's rotation deltas by one factor (demos.py)
         if not args.no_rot_rescale:
@@ -315,10 +315,10 @@ GRASPS = (("top", 0), ("leg", 4))
 
 
 def part_from_ee(o: np.ndarray, slot: int) -> np.ndarray:
-    """A part's position relative to the EE, in the robot-base frame (m). The observation
-    holds the EE in the base frame and the parts in the tag frame."""
-    part_tag = o[SL["parts_poses"]].reshape(-1, 9)[slot, :3]
-    part_base = np.asarray(TAG_POS_W) + TAG_ROT_W @ part_tag
+    """A part's position relative to the EE, in the robot-base frame (m). The EE is in the base
+    frame; the parts are too in the ResiP task, in the tag frame otherwise."""
+    part = o[SL["parts_poses"]].reshape(-1, 9)[slot, :3]
+    part_base = part if OBSTACLE_OBS else np.asarray(TAG_POS_W) + TAG_ROT_W @ part
     return part_base - o[SL["ee_pos"]]
 
 
@@ -477,7 +477,7 @@ def main() -> None:
     episodes = zarr_episodes(Path(args.zarr).expanduser()) if args.zarr else pkl_episodes(Path(args.demos).expanduser())
     cfg = load_cfg_from_registry(args.task, "env_cfg_entry_point")
     layout = fbabs_obs_layout(cfg)
-    OBSTACLE_OBS = any(name == "obstacle_pose" for name, _ in layout)
+    OBSTACLE_OBS = any(name == "obstacle_xy" for name, _ in layout)
     _s = sum(w for _, w in layout)
     cfg.scene.num_envs = 1
     cfg.episode_length_s = 1e6

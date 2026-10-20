@@ -239,11 +239,12 @@ def test_resip_sim_cfgs(cfg_module):
         arm = cfg.actions.fb.arm if hasattr(cfg.actions, "fb") else cfg.actions.arm
         assert arm.controller.use_relative_mode is (not absolute) and arm.controller.ik_method == "pinv"
         assert arm.body_offset.pos == cfg_module.EE_OFFSET
-    # the ResiP FBAbs observation adds the front obstacle's pose after the parts (70)
+    # the ResiP FBAbs observation: the parts in the robot-base frame, then the front obstacle's x, y (63)
     resip = cfg_module.OneLegFBAbsResiPEnvCfg()
-    assert resip.observations.policy.obstacle_pose is not None
+    pol = resip.observations.policy
+    assert pol.obstacle_xy is not None and pol.parts_poses.func.__name__ == "parts_poses_b_rot6d"
     assert cfg_module.fbabs_obs_layout(resip) == cfg_module.FBABS_RESIP_OBS_LAYOUT
-    assert sum(w for _, w in cfg_module.FBABS_RESIP_OBS_LAYOUT) == 70
+    assert sum(w for _, w in cfg_module.FBABS_RESIP_OBS_LAYOUT) == 63
     # the port's cfgs are untouched
     port = cfg_module.OneLegFBAbsEnvCfg()
     assert cfg_module.fbabs_obs_layout(port) == cfg_module.FBABS_OBS_LAYOUT

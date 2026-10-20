@@ -9,6 +9,9 @@ as the fingers hold something the command comes from that object's pose error:
   centre makes the TCP orbit (:class:`ObjectServo`);
 * the table top is slid into the corner against both walls (the goal sits 2 mm inside
   them, so contact squares it) and released when it stops moving;
+* the free hand (upstream's states: reaching the top and the leg, the regrasp) takes upstream's
+  *target* but steps toward it within the held phases' per-step limits (``pos_step``, and the
+  open hand's turn ``wind_step_deg``), not upstream's doubled, up-to-11.5-cm, one-jump command;
 * phases hand over on error (position, tilt, the leg's own height or yaw no longer
   changing, the gripper's width), never on a step count; only the episode has a clock;
 * the leg is lifted upright, carried over the hole, lowered until its own height stops
@@ -238,6 +241,9 @@ class ServoOneLegPolicy:
         # controller that closes it all (ResiP's differential IK into stiff joint PD)
         self.gain = float(gain)
         self.leg.wind_step_deg = self.gain * wind_step_deg  # a command
+        #: the free hand (upstream's states) turns at most this much per step (rad): the open
+        #: hand's rate, as winding it back over the leg
+        self.free_rot_step = np.radians(wind_step_deg)
         # pos_step / rot_step_deg are the wanted motion per step; the command is gain x that
         self.servo = ObjectServo(
             kp_pos=self.gain, kp_rot=self.gain, max_cmd_pos=self.gain * pos_step, max_cmd_rot_deg=self.gain * rot_step_deg
@@ -381,7 +387,7 @@ class ServoOneLegPolicy:
         goal_pos, goal_R, grip = ee_pos.copy(), ee_R.copy(), self.gripper
         skill_complete = 0
         assembled_flag = False
-        upstream_scaling = False  # free-hand states use upstream's delta scaling
+        free_hand = False  # upstream's states: their target, stepped within the per-step limits
 
         T_top, T_leg, seat = self._poses(s)
         leg_pos, leg_R = T_leg[:3, 3].copy(), T_leg[:3, :3].copy()
@@ -398,7 +404,7 @@ class ServoOneLegPolicy:
         # ---------------------------------------------------------------- the table top
         if self.phase == "top_free":
             goal_pos, goal_R, grip, skill_complete = self.top.pre_assemble(s)
-            upstream_scaling = True
+            free_hand = True
             if self.top.state not in self.TOP_FREE:  # 'push': the top is in the fingers
                 self.gripper = 1.0
                 grip = 1.0
@@ -446,7 +452,7 @@ class ServoOneLegPolicy:
         # ---------------------------------------------------------------- the leg: pick
         elif self.phase == "leg_free":
             goal_pos, goal_R, grip, skill_complete = self.leg.fsm_step(s, "square_table_top")
-            upstream_scaling = True
+            free_hand = True
             if self.leg.state not in self.LEG_FREE:  # 'lift_up': the leg is in the fingers
                 self.gripper = 1.0
                 grip = 1.0
@@ -503,7 +509,7 @@ class ServoOneLegPolicy:
         # ---------------------------------------------------------------- the leg: screw
         elif self.phase == "regrasp_free":
             goal_pos, goal_R, grip, skill_complete = self.leg.fsm_step(s, "square_table_top")
-            upstream_scaling = True
+            free_hand = True
             if self.screw_pivot and self.leg.state in self.REGRASP_FREE:
                 # the hand's axis along the leg's assumed axis: the upstream targets (straight
                 # down onto the leg, hovering above it) tilted with the leg, about its centre
@@ -589,21 +595,28 @@ class ServoOneLegPolicy:
         elif self.phase == "done":
             self.done = True
 
-        grip = float(self.gripper if not upstream_scaling else grip)
+        grip = float(self.gripper if not free_hand else grip)
 
         # -- goal -> action
+        if free_hand:
+            # upstream's target is where the hand should end up, not this step's motion: step
+            # toward it within the same per-step limits as the held phases -- at most pos_step
+            # of translation and free_rot_step of rotation, a command gain x that (upstream
+            # instead doubled the error, x1.5 past 3 cm, up to 11.5 cm, and turned in one jump)
+            goal_pos, goal_R = self._step_toward(goal_pos, goal_R, ee_pos, ee_R)
         delta_pos = goal_pos - ee_pos
-        if upstream_scaling:  # upstream's get_assembly_action scaling and clamp
-            sign = np.sign(delta_pos)
-            delta_pos = np.abs(delta_pos) * 2
-            delta_pos = np.where(delta_pos > 0.03, 0.03 + (delta_pos - 0.03) * 1.5, delta_pos) * sign
-            max_delta = 0.115 * np.ones(3)
-            max_delta[2] -= 0.04
-            delta_pos = np.clip(delta_pos, -max_delta, max_delta)
         delta_quat = quat_mul(quat_conj(ee_quat), mat_to_quat(goal_R))  # in the EE frame
         return ScriptedAction(
             delta_pos, delta_quat, grip, goal_pos, goal_R, skill_complete, self.state, assembled_flag, self.done
         )
+
+    def _step_toward(self, goal_pos, goal_R, ee_pos, ee_R):
+        """This step's command toward a free-hand target: ``gain`` x the error, the translation
+        capped at ``gain * pos_step`` and the rotation (about the shortest axis) at
+        ``gain * free_rot_step`` -- what the object servo does while holding a part."""
+        dp = ObjectServo._sat(self.gain * (np.asarray(goal_pos, dtype=np.float64) - ee_pos), self.gain * self.pos_step)
+        rv = ObjectServo._sat(self.gain * mat_to_rotvec(goal_R @ ee_R.T), self.gain * self.free_rot_step)
+        return ee_pos + dp, rotvec_to_mat(rv) @ ee_R
 
     def _straight_up(self, ee_pos: np.ndarray):
         """The hold pose's x, y and orientation, z ramped up by at most pos_step a step to
