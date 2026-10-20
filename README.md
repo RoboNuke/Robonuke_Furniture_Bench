@@ -149,6 +149,11 @@ steps at most); only then does the screw turn begin. `--pivot_dz` raises that sa
 hole axis (its centre above the hole point, ramped in over 5 steps), so the hand presses less. Everything it uses (the leg's and the top's poses) is in the policy
 observation. `--screw_press` defaults to 0.002 (the press sweep's best failure mix).
 
+### Where demos go
+
+Collect demo sets meant for training under `datasets/` in this repo (git-ignored), one folder per
+set, e.g. `--out_dir datasets/pivot_vary_dart`; not under `/tmp`.
+
 ### Demo variety (`--vary`, `--dart_prob`)
 
 Fifty demos from one fixed expert follow one corridor through the task, and BC clones that
