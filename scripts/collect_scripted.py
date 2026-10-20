@@ -32,7 +32,7 @@ in every env, so recording many envs is slow). ``--seed`` also seeds the env's r
 every collection its own, or it repeats the same starts.
 
 Not headless, with the viewport window focused: ``k`` makes the current round fail now,
-``l`` quits immediately (the current attempt is discarded).
+``l`` quits immediately (the whole current round is discarded).
 """
 
 import argparse
@@ -377,7 +377,7 @@ def main() -> None:
         variation, dart = None, None
         if args.policy == "servo":
             kwargs = dict(
-                seed=args.seed + attempt - 1,
+                seed=int(np.random.SeedSequence([args.seed, attempt, 0]).generate_state(1)[0]),
                 noise=not args.no_noise,
                 pos_step=args.pos_speed * env.step_dt,
                 rot_step_deg=args.rot_speed * env.step_dt,
@@ -411,7 +411,7 @@ def main() -> None:
                     np.random.default_rng([args.seed, attempt, 2]), args.dart_prob, args.dart_steps, args.dart_pos, args.dart_rot
                 )
         else:
-            policy = sp.OneLegScriptedPolicy(seed=args.seed + attempt - 1, noise=not args.no_noise)
+            policy = sp.OneLegScriptedPolicy(seed=int(np.random.SeedSequence([args.seed, attempt, 0]).generate_state(1)[0]), noise=not args.no_noise)
             policy.leg.yaw_step_deg = args.rot_speed * env.step_dt
             policy.leg.wind_step_deg = args.wind_speed * env.step_dt
             policy.leg.insert_lift = args.insert_lift
