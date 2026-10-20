@@ -24,7 +24,14 @@ draw is saved in the pkl as ``variation``); ``--dart_prob P`` adds DART bursts t
 sent in free space while ``actions`` keeps the expert's clean commands (the executed ones are
 ``actions_executed``).
 
-Not headless, with the viewport window focused: ``k`` makes the current rollout fail now,
+Parallel (``--num_envs N``): N attempts run side by side in synchronous rounds -- one reset,
+one expert per env (seeded by its attempt number), every env stepped together; an env whose
+expert is done waits, holding still, until the round's slowest one finishes, then all get the
+end-of-attempt check and are saved. Prints and ``--record`` follow env 0 (a camera is spawned
+in every env, so recording many envs is slow). ``--seed`` also seeds the env's resets: give
+every collection its own, or it repeats the same starts.
+
+Not headless, with the viewport window focused: ``k`` makes the current round fail now,
 ``l`` quits immediately (the current attempt is discarded).
 """
 
@@ -43,8 +50,11 @@ from isaaclab.app import AppLauncher  # noqa: E402
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument("--out_dir", type=str, default="fb_demos")
-parser.add_argument("--num_demos", type=int, default=1)
-parser.add_argument("--seed", type=int, default=0)
+parser.add_argument("--num_demos", type=int, default=1, help="successes to save (a round's extra successes are kept too)")
+parser.add_argument("--num_envs", type=int, default=1,
+                    help="attempts run side by side, one expert per env, in synchronous rounds (each round lasts as long as its slowest)")
+parser.add_argument("--seed", type=int, default=0,
+                    help="seeds the experts and the env's reset randomization: give every collection its own")
 parser.add_argument("--policy", choices=["servo", "scripted"], default="servo",
                     help="servo: closes the loop on the held object (furniture_lab/servo_policy.py); scripted: upstream's hand-only state machine")
 parser.add_argument("--lead", type=float, default=10.0, help="servo: deg the hand leads the leg's own yaw while screwing")
@@ -209,11 +219,12 @@ class AbortKeys:
         self.fail = False
 
 
-def assembled_now(env) -> bool:
-    """FurnitureBench's assembled rule on the current poses (the env's tracker is a latch)."""
+def assembled_now(env) -> np.ndarray:
+    """FurnitureBench's assembled rule on the current poses, per env (the env's tracker is a
+    latch): (num_envs,) bool."""
     tr = tracker(env)
     pos, quat = parts_pose_w(env)
-    return bool(pairs_assembled(pos, quat, tr.pairs, tr.targets, tr.pos_threshold, tr.ori_bound)[0, 0].item())
+    return pairs_assembled(pos, quat, tr.pairs, tr.targets, tr.pos_threshold, tr.ori_bound)[:, 0].cpu().numpy().astype(bool)
 
 
 # ------------------------------------------------------------------------------ state out
@@ -236,25 +247,25 @@ def ee_vel_b(env):
     return lin, ang
 
 
-def read_state(env, part_names, mesh_frame: str):
-    """This env's state as :class:`ScriptedState` (tag frame, OBJ mesh frames) and as the
+def read_state(env, part_names, mesh_frame: str, i: int = 0):
+    """Env ``i``'s state as :class:`ScriptedState` (tag frame, OBJ mesh frames) and as the
     FurnitureBench observation dict (xyzw) to record."""
     R_mesh = MESH_FRAMES[mesh_frame]
-    origin = env.scene.env_origins[0].cpu().numpy()
+    origin = env.scene.env_origins[i].cpu().numpy()
     pos_b, quat_b = ee_pose_b(env)
-    ee_pos = pos_b[0].cpu().numpy().astype(np.float64)
-    ee_quat = quat_b[0].cpu().numpy().astype(np.float64)
+    ee_pos = pos_b[i].cpu().numpy().astype(np.float64)
+    ee_quat = quat_b[i].cpu().numpy().astype(np.float64)
     robot = env.scene["robot"]
     arm = robot.find_joints("panda_joint.*")[0]
     fingers = robot.find_joints("panda_finger_joint.*")[0]
-    width = float(robot.data.joint_pos[0, fingers].sum().item())
+    width = float(robot.data.joint_pos[i, fingers].sum().item())
     lin, ang = ee_vel_b(env)
 
     parts_tag, parts_flat = {}, []
     for name in part_names:
         part = env.scene[name]
-        p = part.data.root_pos_w[0].cpu().numpy().astype(np.float64) - origin
-        q = part.data.root_quat_w[0].cpu().numpy().astype(np.float64)
+        p = part.data.root_pos_w[i].cpu().numpy().astype(np.float64) - origin
+        q = part.data.root_quat_w[i].cpu().numpy().astype(np.float64)
         T_robot_obj = sp.hom(sp.quat_to_mat(q) @ R_mesh, p)  # USD frame -> OBJ frame
         T_tag = sp.ROBOT_TO_APRIL @ T_robot_obj
         parts_tag[name] = T_tag
@@ -262,31 +273,37 @@ def read_state(env, part_names, mesh_frame: str):
         parts_flat.append(np.concatenate([T_tag[:3, 3], [q_tag[1], q_tag[2], q_tag[3], q_tag[0]]]))
 
     # where the obstacles are this episode (furniture.obstacle_offset moves them at reset)
-    obstacles = {
-        k: env.scene[k].data.root_pos_w[0].cpu().numpy().astype(np.float64) - origin
-        for k in ("obstacle_front", "obstacle_right", "obstacle_left")
-    }
+    obstacles = obstacles_robot(env, i)
     state = sp.ScriptedState(
-        ee_pos, sp.quat_to_mat(ee_quat), width, parts_tag, obstacles, robot.data.joint_pos[0, arm].cpu().numpy().astype(np.float64)
+        ee_pos, sp.quat_to_mat(ee_quat), width, parts_tag, obstacles, robot.data.joint_pos[i, arm].cpu().numpy().astype(np.float64)
     )
     obs = {
         "robot_state": {
             "ee_pos": ee_pos.astype(np.float32),
             "ee_quat": np.array([ee_quat[1], ee_quat[2], ee_quat[3], ee_quat[0]], dtype=np.float32),
-            "ee_pos_vel": lin[0].cpu().numpy().astype(np.float32),
-            "ee_ori_vel": ang[0].cpu().numpy().astype(np.float32),
+            "ee_pos_vel": lin[i].cpu().numpy().astype(np.float32),
+            "ee_ori_vel": ang[i].cpu().numpy().astype(np.float32),
             "gripper_width": np.array([width], dtype=np.float32),
-            "joint_positions": robot.data.joint_pos[0, arm].cpu().numpy().astype(np.float32),
-            "joint_velocities": robot.data.joint_vel[0, arm].cpu().numpy().astype(np.float32),
-            "joint_torques": robot.data.applied_torque[0, arm].cpu().numpy().astype(np.float32),
+            "joint_positions": robot.data.joint_pos[i, arm].cpu().numpy().astype(np.float32),
+            "joint_velocities": robot.data.joint_vel[i, arm].cpu().numpy().astype(np.float32),
+            "joint_torques": robot.data.applied_torque[i, arm].cpu().numpy().astype(np.float32),
             # the external EE wrench estimated from the joint torques (assembly/wrench.py,
             # filtered; robot-base frame, force N then torque N m: what the parts push back
             # on the hand with -- +z while it presses down). For furniture_lab/failures.py
-            "ee_wrench": env.wrench.filtered[0].cpu().numpy().astype(np.float32),
+            "ee_wrench": env.wrench.filtered[i].cpu().numpy().astype(np.float32),
         },
         "parts_poses": np.concatenate(parts_flat).astype(np.float32),
     }
     return state, obs
+
+
+def obstacles_robot(env, i: int) -> dict:
+    """Env ``i``'s three obstacles, robot-base frame (furniture.obstacle_offset moves them at reset)."""
+    origin = env.scene.env_origins[i].cpu().numpy()
+    return {
+        k: env.scene[k].data.root_pos_w[i].cpu().numpy().astype(np.float64) - origin
+        for k in ("obstacle_front", "obstacle_right", "obstacle_left")
+    }
 
 
 def env_action(env, a: sp.ScriptedAction, ee_quat_b: torch.Tensor) -> torch.Tensor:
@@ -304,7 +321,9 @@ def env_action(env, a: sp.ScriptedAction, ee_quat_b: torch.Tensor) -> torch.Tens
 # ------------------------------------------------------------------------------ main
 def main() -> None:
     cfg = OneLegReplayRelResiPCfg() if args.sim == "resip" else OneLegReplayRelCfg()
-    cfg.scene.num_envs = 1
+    cfg.scene.num_envs = args.num_envs
+    # seeds the reset randomization (part poses, obstacle offsets): distinct --seed per run
+    cfg.seed = args.seed
     if args.render_every is not None:
         if args.render_every < 1:
             raise SystemExit("--render_every must be >= 1")
@@ -336,11 +355,13 @@ def main() -> None:
             ),
         )
     env = AssemblyEnv(cfg)
+    N = env.num_envs
     part_names = list(cfg.furniture.part_names)
     out_root = Path(args.out_dir).expanduser() / "one_leg"
     fails_dir = out_root / "fails"
     saved = 0
     attempt = 0
+    rnd = 0
     # continue the fail<n> numbering across runs
     failures = max([int(f.stem[4:]) for f in fails_dir.glob("fail*.pkl") if f.stem[4:].isdigit()] + [0])
     keys = AbortKeys()
@@ -348,18 +369,12 @@ def main() -> None:
         raise SystemExit("--vary / --dart_prob need --policy servo")
     # the servo expert's own defaults for the knobs the collector has no flag for
     servo_defaults = {k: v.default for k, v in inspect.signature(sv.ServoOneLegPolicy).parameters.items()}
-    while saved < args.num_demos:
-        attempt += 1
-        keys.new_attempt()
-        env.reset()
-        zero = torch.zeros(1, env.action_manager.total_action_dim, device=env.device)
-        zero[0, -1] = 1.0  # gripper open
-        for _ in range(5):
-            env.step(zero)  # let the parts settle after the reset
-        tmp_video = out_root / f".attempt{attempt}.mp4"
-        recorder = Recorder(env, tmp_video) if args.record else None
-        variation = None
-        dart = None
+    zero = torch.zeros(N, env.action_manager.total_action_dim, device=env.device)
+    zero[:, -1] = 1.0  # hold still, gripper open
+
+    def make_expert(attempt: int):
+        """One attempt's expert (and its variation draw and DART bursts)."""
+        variation, dart = None, None
         if args.policy == "servo":
             kwargs = dict(
                 seed=args.seed + attempt - 1,
@@ -390,9 +405,6 @@ def main() -> None:
                     "press", "release_dz", "upright_step_deg", "pivot_step_deg")})
                 variation = vr.sample_variation(np.random.default_rng([args.seed, attempt, 1]), base)
                 kwargs.update(variation)
-                print("[collect] variation: " + ", ".join(
-                    f"{k} {v:.4g}" if isinstance(v, float) else f"{k} {tuple(round(x, 4) for x in v)}"
-                    for k, v in variation.items()), flush=True)
             policy = sv.ServoOneLegPolicy(**kwargs)
             if args.dart_prob > 0:
                 dart = vr.DartBursts(
@@ -405,12 +417,31 @@ def main() -> None:
             policy.leg.insert_lift = args.insert_lift
             policy.leg.insert_rate = args.insert_rate
         policy.leg.screw_press = args.screw_press
-        obs_list, acts, acts_exec, rews, skills = [], [], [], [], []
-        assembled_step = None
-        last_state = ""
+        return policy, variation, dart
+
+    while saved < args.num_demos:
+        rnd += 1
+        keys.new_attempt()
+        env.reset()
+        for _ in range(5):
+            env.step(zero)  # let the parts settle after the reset
+        # one round: N attempts side by side, every env with its own expert
+        eps = []
+        for i in range(N):
+            attempt += 1
+            policy, variation, dart = make_expert(attempt)
+            if variation is not None and i == 0:
+                print("[collect] env 0 variation: " + ", ".join(
+                    f"{k} {v:.4g}" if isinstance(v, float) else f"{k} {tuple(round(x, 4) for x in v)}"
+                    for k, v in variation.items()), flush=True)
+            eps.append(dict(
+                attempt=attempt, policy=policy, variation=variation, dart=dart, active=True,
+                obs=[], acts=[], acts_exec=[], rews=[], skills=[], assembled_step=None, last_state="",
+                aborted=False, out_of_limits=False, final_obs=None, obstacles=obstacles_robot(env, i),
+            ))
+        tmp_video = out_root / f".round{rnd}.mp4"
+        recorder = Recorder(env, tmp_video) if args.record else None
         t0 = time.time()
-        aborted = False
-        out_of_limits = False
         for t in range(args.timeout):
             if keys.quit:
                 print("[collect] quit by key", flush=True)
@@ -420,114 +451,131 @@ def main() -> None:
                 env.close()
                 app.close()
                 sys.exit(0)
-            if keys.fail:
-                aborted = True
-                print(f"[collect] step {t:4d}: failed by key", flush=True)
-                break
-            if bool(part_out_of_limits(env)[0].item()):
-                out_of_limits = True
-                print(f"[collect] step {t:4d}: a part left the position limits -> failure", flush=True)
-                break
-            state, obs = read_state(env, part_names, cfg.furniture.mesh_frame)
-            a = policy.act(state)
-            if a.done:
-                break
-            if a.state != last_state:
-                leg_z = float(env.scene["square_table_leg4"].data.root_pos_w[0, 2]) - float(env.scene.env_origins[0, 2])
-                print(f"[collect] step {t:4d}: {a.state}  (leg z {leg_z:.4f}, ee z {state.ee_pos[2]:.4f})", flush=True)
-                last_state = a.state
-            obs_list.append(obs)
-            # upstream's 8-D action, xyzw: the expert's own command (the BC label) ...
-            q = a.delta_quat
-            acts.append(np.concatenate([a.delta_pos, [q[1], q[2], q[3], q[0]], [a.gripper]]).astype(np.float32))
-            # ... and, during a DART burst, a perturbed one is what the env is given
-            sent = a
-            off = dart.offset(a.state) if dart is not None else None
-            if off is not None:
-                dpos, dquat = vr.DartBursts.apply(a.delta_pos, a.delta_quat, off)
-                sent = dataclasses.replace(a, delta_pos=dpos, delta_quat=dquat)
-            qs = sent.delta_quat
-            acts_exec.append(np.concatenate([sent.delta_pos, [qs[1], qs[2], qs[3], qs[0]], [sent.gripper]]).astype(np.float32))
+            oob = part_out_of_limits(env).cpu().numpy().astype(bool)
             _, ee_quat_b = ee_pose_b(env)
-            env.step(env_action(env, sent, ee_quat_b))
-            now_assembled = bool(assembled_now(env))  # the raw check, not the latch
-            if a.assembled and assembled_step is None:  # the policy's own check fired
-                assembled_step = t
-                print(f"[collect] step {t:4d}: assembled", flush=True)
-            reward = 1.0 if assembled_step == t else 0.0
-            rews.append(reward)
-            skills.append(float(a.skill_complete))
+            actions = zero.clone()
+            acted = []
+            for i, ep in enumerate(eps):
+                if not ep["active"]:
+                    continue
+                if keys.fail:
+                    ep["aborted"] = True
+                elif oob[i]:
+                    ep["out_of_limits"] = True
+                    print(f"[collect] env {i} step {t:4d}: a part left the position limits -> failure", flush=True)
+                state, obs = read_state(env, part_names, cfg.furniture.mesh_frame, i)
+                if ep["aborted"] or ep["out_of_limits"]:
+                    ep["active"], ep["final_obs"] = False, obs
+                    continue
+                a = ep["policy"].act(state)
+                if a.done:
+                    ep["active"], ep["final_obs"] = False, obs
+                    continue
+                if i == 0 and a.state != ep["last_state"]:
+                    print(f"[collect] env 0 step {t:4d}: {a.state}  (ee z {state.ee_pos[2]:.4f})", flush=True)
+                    ep["last_state"] = a.state
+                ep["obs"].append(obs)
+                # upstream's 8-D action, xyzw: the expert's own command (the BC label) ...
+                q = a.delta_quat
+                ep["acts"].append(np.concatenate([a.delta_pos, [q[1], q[2], q[3], q[0]], [a.gripper]]).astype(np.float32))
+                # ... and, during a DART burst, a perturbed one is what the env is given
+                sent = a
+                off = ep["dart"].offset(a.state) if ep["dart"] is not None else None
+                if off is not None:
+                    dpos, dquat = vr.DartBursts.apply(a.delta_pos, a.delta_quat, off)
+                    sent = dataclasses.replace(a, delta_pos=dpos, delta_quat=dquat)
+                qs = sent.delta_quat
+                ep["acts_exec"].append(np.concatenate([sent.delta_pos, [qs[1], qs[2], qs[3], qs[0]], [sent.gripper]]).astype(np.float32))
+                actions[i] = env_action(env, sent, ee_quat_b[i : i + 1])[0]
+                acted.append((i, a))
+            if keys.fail:
+                print(f"[collect] step {t:4d}: round failed by key", flush=True)
+            if not acted:
+                break
+            env.step(actions)
+            for i, a in acted:
+                ep = eps[i]
+                if a.assembled and ep["assembled_step"] is None:  # the policy's own check fired
+                    ep["assembled_step"] = len(ep["acts"]) - 1
+                    print(f"[collect] env {i} step {t:4d}: assembled", flush=True)
+                ep["rews"].append(1.0 if ep["assembled_step"] == len(ep["acts"]) - 1 else 0.0)
+                ep["skills"].append(float(a.skill_complete))
             if t % args.print_every == 0:
-                print(
-                    f"[collect] step {t:4d}  state {a.state:22s}  ee z {state.ee_pos[2]:.3f}  width {state.gripper_width:.3f}",
-                    flush=True,
-                )
+                print(f"[collect] round {rnd} step {t:4d}: {sum(ep['active'] for ep in eps)}/{N} envs still going", flush=True)
             if recorder is not None:
-                recorder.caption = f"scripted  step {t:4d}\n{a.state}\nassembled now {now_assembled}"
+                st = eps[0]["last_state"] if eps[0]["active"] else "done"
+                recorder.caption = f"scripted  env 0  step {t:4d}\n{st}"
                 recorder.frame()
-        obs_list.append(read_state(env, part_names, cfg.furniture.mesh_frame)[1])  # the final observation
+        for i, ep in enumerate(eps):  # timed out: the observation now
+            if ep["active"]:
+                ep["active"], ep["final_obs"] = False, read_state(env, part_names, cfg.furniture.mesh_frame, i)[1]
         # the verdict: the leg is assembled NOW, after the hand has lifted clear -- not "was at
         # some step". A leg knocked through the seat pose, or knocked out after seating, fails.
         for _ in range(10):
             env.step(zero)
-        final_assembled = bool(assembled_now(env))
-        success = assembled_step is not None and final_assembled and not (aborted or out_of_limits)
-        if assembled_step is not None and not final_assembled:
-            print("[collect] assembled during the episode but NOT at the end: counted as a failure", flush=True)
-        print(
-            f"[collect] demo {attempt}: {'success' if success else 'FAILED'} after {len(acts)} steps "
-            f"({time.time() - t0:.0f} s), assembled at {assembled_step}"
-            + (f"; DART: {dart.bursts} bursts, {dart.perturbed_steps} steps perturbed" if dart is not None else ""),
-            flush=True,
-        )
+        final_assembled = assembled_now(env)
         if recorder is not None:
             recorder.close()
-        data = {
-            "observations": obs_list,
-            "actions": acts,
-            "rewards": rews,
-            "skills": skills,
-            "success": success,
-            "furniture": "one_leg",
-            # robot-base frame positions of the three obstacles this episode (kinematic: fixed
-            # from the reset on), so a replay can put them back
-            "obstacles_robot": {
-                k: (env.scene[k].data.root_pos_w[0] - env.scene.env_origins[0]).cpu().numpy().astype(np.float64)
-                for k in ("obstacle_front", "obstacle_right", "obstacle_left")
-            },
-            # the expert drawn for this attempt (--vary; None = the fixed expert)
-            "variation": variation,
-            "error": aborted or out_of_limits,
-            "error_description": "failed by key" if aborted else ("part out of position limits" if out_of_limits else ""),
-        }
-        if dart is not None:
-            # what the env was actually given (replay these); ``actions`` are the clean labels
-            data["actions_executed"] = acts_exec
-            data["dart"] = {
-                "prob": args.dart_prob, "steps": args.dart_steps, "pos": args.dart_pos, "rot_deg": args.dart_rot,
-                "bursts": dart.bursts, "perturbed_steps": dart.perturbed_steps, "states": sorted(vr.DART_STATES),
+        n_ok = 0
+        for i, ep in enumerate(eps):
+            ok_end = bool(final_assembled[i])
+            success = ep["assembled_step"] is not None and ok_end and not (ep["aborted"] or ep["out_of_limits"])
+            dart = ep["dart"]
+            print(
+                f"[collect] env {i} attempt {ep['attempt']}: {'success' if success else 'FAILED'} after {len(ep['acts'])} steps, "
+                f"assembled at {ep['assembled_step']}"
+                + ("" if ep["assembled_step"] is None or ok_end else " but NOT at the end (a failure)")
+                + (f"; DART: {dart.bursts} bursts, {dart.perturbed_steps} steps perturbed" if dart is not None else ""),
+                flush=True,
+            )
+            data = {
+                "observations": ep["obs"] + [ep["final_obs"]],
+                "actions": ep["acts"],
+                "rewards": ep["rews"],
+                "skills": ep["skills"],
+                "success": success,
+                "furniture": "one_leg",
+                # robot-base frame positions of the three obstacles this episode (kinematic: fixed
+                # from the reset on), so a replay can put them back
+                "obstacles_robot": ep["obstacles"],
+                # the expert drawn for this attempt (--vary; None = the fixed expert)
+                "variation": ep["variation"],
+                "error": ep["aborted"] or ep["out_of_limits"],
+                "error_description": "failed by key" if ep["aborted"] else ("part out of position limits" if ep["out_of_limits"] else ""),
             }
-        if success:
-            stamp = time.strftime("%Y-%m-%d-%H:%M:%S")
-            demo_dir = out_root / stamp
-            demo_dir.mkdir(parents=True, exist_ok=True)
-            with open(demo_dir / f"{stamp}.pkl", "wb") as f:
-                pickle.dump(data, f)
-            if recorder is not None:
-                tmp_video.replace(demo_dir / "recording.mp4")
-            print(f"[collect] saved {demo_dir / (stamp + '.pkl')}" + (" + recording.mp4" if recorder else ""), flush=True)
-            saved += 1
-        else:
-            failures += 1
-            if args.save_failure:
-                fails_dir.mkdir(parents=True, exist_ok=True)
-                with open(fails_dir / f"fail{failures}.pkl", "wb") as f:
+            if dart is not None:
+                # what the env was actually given (replay these); ``actions`` are the clean labels
+                data["actions_executed"] = ep["acts_exec"]
+                data["dart"] = {
+                    "prob": args.dart_prob, "steps": args.dart_steps, "pos": args.dart_pos, "rot_deg": args.dart_rot,
+                    "bursts": dart.bursts, "perturbed_steps": dart.perturbed_steps, "states": sorted(vr.DART_STATES),
+                }
+            video = recorder is not None and i == 0
+            if success:
+                # the attempt number keeps envs that finish in the same second apart
+                stamp = time.strftime("%Y-%m-%d-%H:%M:%S") + f"-a{ep['attempt']}"
+                demo_dir = out_root / stamp
+                demo_dir.mkdir(parents=True, exist_ok=True)
+                with open(demo_dir / f"{stamp}.pkl", "wb") as f:
                     pickle.dump(data, f)
-                if recorder is not None:
-                    tmp_video.replace(fails_dir / f"fail{failures}.mp4")
-                print(f"[collect] saved failure {fails_dir / f'fail{failures}.pkl'}" + (f" + fail{failures}.mp4" if recorder else ""), flush=True)
-            elif recorder is not None:
-                tmp_video.unlink(missing_ok=True)
+                if video:
+                    tmp_video.replace(demo_dir / "recording.mp4")
+                saved += 1
+                n_ok += 1
+            else:
+                failures += 1
+                if args.save_failure:
+                    fails_dir.mkdir(parents=True, exist_ok=True)
+                    with open(fails_dir / f"fail{failures}.pkl", "wb") as f:
+                        pickle.dump(data, f)
+                    if video:
+                        tmp_video.replace(fails_dir / f"fail{failures}.mp4")
+        if recorder is not None:
+            tmp_video.unlink(missing_ok=True)
+        print(
+            f"[collect] round {rnd}: {n_ok}/{N} succeeded ({time.time() - t0:.0f} s); {saved} saved so far, "
+            f"{attempt} attempts", flush=True,
+        )
         if keys.quit:
             print("[collect] quit by key", flush=True)
             break

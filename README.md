@@ -149,6 +149,13 @@ steps at most); only then does the screw turn begin. `--pivot_dz` raises that sa
 hole axis (its centre above the hole point, ramped in over 5 steps), so the hand presses less. Everything it uses (the leg's and the top's poses) is in the policy
 observation. `--screw_press` defaults to 0.002 (the press sweep's best failure mix).
 
+### Collecting in parallel (`--num_envs`)
+
+`collect_scripted.py --num_envs N` runs N attempts side by side, one expert per env, in
+synchronous rounds (a round lasts as long as its slowest attempt; finished envs hold still).
+Prints and `--record` follow env 0. `--seed` now also seeds the env's reset randomization, so
+a new collection needs a new `--seed` or it repeats the same starts.
+
 ### Where demos go
 
 Collect demo sets meant for training under `datasets/` in this repo (git-ignored), one folder per
