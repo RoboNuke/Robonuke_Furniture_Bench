@@ -156,8 +156,21 @@ class FurnitureCfg:
     #: table = (part + table) / 2). Defaults are FurnitureSim's: 0.15 and 0.10, i.e. 0.125
     #: between a part and the table -- icy; wood on laminate is 0.3-0.5. Applied in
     #: ``AssemblyEnvCfg.__post_init__`` to the startup events and the sim material.
+    #: ``table_friction`` reaches only the sim's default material, i.e. the shapes with no material
+    #: of their own (the ground, and the robot unless its USD binds one or ``robot_friction`` is
+    #: set); the table box keeps ``TABLE_FRICTION`` and the obstacles ``obstacle_friction``.
     part_friction: float = PART_FRICTION
     table_friction: float = TABLE_FRICTION
+    #: friction of the three obstacle boxes. Default 1.0 (since 2026-10-20; ``TABLE_FRICTION`` 0.10
+    #: before): FurnitureSim / ResiP's sim sets none on its obstacles, so they keep Isaac Gym's asset
+    #: default 1.0 (``RESIP_CONTACT_FRICTION``): a top pushed into the corner grips the walls there
+    obstacle_friction: float = 1.0
+    #: friction of every robot shape (fingers, hand, links), set once at startup. Default 1.0 (since
+    #: 2026-10-20): FurnitureSim / ResiP's sim sets none on the Franka, so its fingers grip at Isaac
+    #: Gym's asset default 1.0 (``RESIP_CONTACT_FRICTION``). Negative (-1, the earlier default): not
+    #: set -- whatever the robot USD binds, else the sim's default material. (A float, not None: a
+    #: config file can only override a field with a value of its type.)
+    robot_friction: float = 1.0
     #: the finger drives. Isaac Lab's Franka: stiffness 2000 N/m, effort limit 200 N, each
     #: finger its own drive -- the first pad to touch a leg that is held by its thread shoves
     #: it over (~25 N on a 3 cm lever) before the other pad arrives, and the fingers close
@@ -294,6 +307,8 @@ class EventCfg:
     leg2_friction = _friction_event("square_table_leg2", PART_FRICTION)
     leg3_friction = _friction_event("square_table_leg3", PART_FRICTION)
     leg4_friction = _friction_event("square_table_leg4", PART_FRICTION)
+    # every robot shape's friction: set by apply_friction from furniture.robot_friction (< 0: off)
+    robot_friction: Optional[EventTerm] = None
 
     # -- reset, in this order: everything to its default, then the obstacles offset and the
     #    parts perturbed, then
@@ -414,7 +429,8 @@ class AssemblyEnvCfg(ManagerBasedRLEnvCfg):
 
     def apply_friction(self) -> None:
         """Push ``furniture.part_friction`` / ``table_friction`` into the startup friction
-        events and the sim's default material (call again after changing them)."""
+        events and the sim's default material, ``obstacle_friction`` into the obstacle boxes and
+        ``robot_friction`` into a startup event on the robot (call again after changing them)."""
         f = float(self.furniture.part_friction)
         for name in PART_NAMES:
             term = getattr(self.events, f"{name.replace('square_table_', '')}_friction", None)
@@ -423,6 +439,13 @@ class AssemblyEnvCfg(ManagerBasedRLEnvCfg):
                 term.params["dynamic_friction_range"] = (f, f)
         self.sim.physics_material.static_friction = float(self.furniture.table_friction)
         self.sim.physics_material.dynamic_friction = float(self.furniture.table_friction)
+        for name in ("obstacle_front", "obstacle_left", "obstacle_right"):
+            obstacle = getattr(self.scene, name, None)
+            if obstacle is not None:
+                obstacle.spawn.physics_material.static_friction = float(self.furniture.obstacle_friction)
+                obstacle.spawn.physics_material.dynamic_friction = float(self.furniture.obstacle_friction)
+        r = float(self.furniture.robot_friction)
+        self.events.robot_friction = None if r < 0 else _friction_event("robot", r)
 
 
 @configclass
@@ -575,6 +598,10 @@ RESIP_ARM_DAMPING = 200.0
 RESIP_OBSTACLE_OFFSET = 0.02
 #: the finger speed limit (m/s per finger) of ``apply_resip``
 RESIP_GRIPPER_SPEED = 0.2
+#: the friction of every shape ResiP's sim sets none on -- the obstacles and the whole Franka,
+#: fingers included: Isaac Gym's asset default (their URDFs loaded and read back, 1.0 on every
+#: shape). Not applied by ``apply_resip``; ``furniture.obstacle_friction`` / ``robot_friction`` opt in
+RESIP_CONTACT_FRICTION = 1.0
 
 
 def dik_arm_cfg(absolute: bool) -> DifferentialInverseKinematicsActionCfg:

@@ -85,7 +85,9 @@ def test_reset_events_run_in_order(cfg_module):
     assert names == ["reset_scene", "reset_obstacles", "reset_parts", "reset_assembly"]
     assert events.reset_parts.params == {"pos_range": 0.015, "yaw_range_deg": 15.0, "max_tries": 20}
     startup = [v for v in vars(events).values() if getattr(v, "mode", None) == "startup"]
-    friction = [v for v in startup if "static_friction_range" in v.params]
+    # the parts' friction events (the robot's own is furniture.robot_friction's: 1.0 by default)
+    friction = [v for v in startup if "static_friction_range" in v.params and v.params["asset_cfg"]._args[0] != "robot"]
+    assert events.robot_friction.params["static_friction_range"] == (1.0, 1.0)
     mass = [v for v in startup if "mass_distribution_params" in v.params]
     assert sorted(v.params["asset_cfg"]._args[0] for v in friction) == sorted(st.PART_NAMES)
     assert all(v.params["static_friction_range"] == (st.PART_FRICTION,) * 2 for v in friction)
@@ -160,6 +162,43 @@ def test_friction_knobs_reach_the_events_and_the_table(cfg_module):
         assert term.params["dynamic_friction_range"] == (0.5, 0.5)
     assert cfg.sim.physics_material.static_friction == 0.4
     assert cfg.sim.physics_material.dynamic_friction == 0.4
+
+
+OBSTACLES = ("obstacle_front", "obstacle_left", "obstacle_right")
+
+
+def test_obstacle_and_robot_friction_default_to_furnituresims(cfg_module):
+    """Defaults on every cfg (apply_resip included): FurnitureSim's 1.0 on the obstacle boxes and a
+    startup event giving every robot shape 1.0. The earlier values (0.10, -1: not set) still work."""
+    for name in ("OneLegEnvCfg", "OneLegFBAbsEnvCfg", "OneLegFBAbsResiPEnvCfg"):
+        cfg = getattr(cfg_module, name)()
+        assert cfg.furniture.obstacle_friction == cfg.furniture.robot_friction == cfg_module.RESIP_CONTACT_FRICTION == 1.0
+        for ob in OBSTACLES:
+            mat = getattr(cfg.scene, ob).spawn.physics_material
+            assert (mat.static_friction, mat.dynamic_friction) == (1.0, 1.0)
+        assert cfg.events.robot_friction.params["static_friction_range"] == (1.0, 1.0)
+    cfg = cfg_module.OneLegFBAbsResiPEnvCfg()
+    cfg.furniture.obstacle_friction = st.TABLE_FRICTION
+    cfg.apply_friction()
+    assert getattr(cfg.scene, "obstacle_front").spawn.physics_material.static_friction == st.TABLE_FRICTION
+    cfg.furniture.obstacle_friction = 1.0
+    cfg.apply_friction()
+    for ob in OBSTACLES:
+        mat = getattr(cfg.scene, ob).spawn.physics_material
+        assert (mat.static_friction, mat.dynamic_friction) == (1.0, 1.0)
+    term = cfg.events.robot_friction
+    assert term.mode == "startup" and term.params["static_friction_range"] == (1.0, 1.0)
+    assert term.params["dynamic_friction_range"] == (1.0, 1.0)
+    assert term.params["asset_cfg"]._args == ("robot",) and not hasattr(term.params["asset_cfg"], "body_names")
+    # the table box and the parts are untouched
+    assert cfg.scene.table.spawn.physics_material.static_friction == st.TABLE_FRICTION
+    assert cfg.events.leg4_friction.params["static_friction_range"] == (st.PART_FRICTION, st.PART_FRICTION)
+    cfg.furniture.robot_friction = -1.0
+    cfg.apply_friction()
+    assert cfg.events.robot_friction is None
+    cfg.furniture.robot_friction = 0.0  # zero is a friction, not "off"
+    cfg.apply_friction()
+    assert cfg.events.robot_friction.params["static_friction_range"] == (0.0, 0.0)
 
 
 def test_reset_and_masses_default_to_furniturebench(cfg_module):

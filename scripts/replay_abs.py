@@ -72,6 +72,8 @@ parser.add_argument("--grip_force", type=float, default=None, help="finger effor
 parser.add_argument("--grip_speed", type=float, default=None, help="finger speed cap m/s (ResiP task: 0.2); 0 = the asset default")
 parser.add_argument("--no_rot_rescale", action="store_true", help="zarr: keep ResiP's shrunk rotation deltas as stored")
 # the task's furniture fields (defaults: the task's own)
+parser.add_argument("--obstacle_friction", type=float, default=None, help="furniture.obstacle_friction (ResiP's sim: 1.0)")
+parser.add_argument("--robot_friction", type=float, default=None, help="furniture.robot_friction (ResiP's sim: 1.0)")
 parser.add_argument("--part_assets", default=None, help="furniture.part_assets (furniturebench | uwlab)")
 parser.add_argument("--print_every", type=int, default=50, help="per-step EE error lines (0: off)")
 AppLauncher.add_app_launcher_args(parser)
@@ -485,6 +487,10 @@ def main() -> None:
         f.part_assets = args.part_assets
     cfg.apply_assets()
     MESH = f.mesh_frame
+    for name, value in (("obstacle_friction", args.obstacle_friction), ("robot_friction", args.robot_friction)):
+        if value is not None:
+            setattr(f, name, value)
+    cfg.apply_friction()
     layout = fbabs_obs_layout(cfg)
     OBSTACLE_OBS = any(name == "obstacle_xy" for name, _ in layout)
     _s = sum(w for _, w in layout)

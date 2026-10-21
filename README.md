@@ -257,6 +257,14 @@ Fields that bring the port to FurnitureSim / ResiP's sim, set from a project con
 (datasets recorded before used the port's own: obstacle friction 0.10, no robot material, the hand's
 centre-of-mass velocity, `randomness: port`, the real masses, the position gripper, UWLab's meshes):
 
+* **Contact friction.** ResiP's sim sets friction only on the parts (0.15) and the table (0.10); the
+  obstacles and the whole Franka, fingers included, keep Isaac Gym's asset default, 1.0 (their URDFs
+  loaded and read back). Here the obstacle boxes are at 0.10 and the robot has no material of its
+  own. `furniture.obstacle_friction` (default 1.0; earlier 0.10) sets the obstacle boxes,
+  `furniture.robot_friction` (default 1.0; -1: not set, the earlier default) every robot shape, by a
+  startup event; `RESIP_CONTACT_FRICTION` is the 1.0.
+  `furniture.table_friction` only reaches the sim's default material (the shapes with no material
+  of their own), not the table box, which stays at 0.10.
 * **The reset distribution.** `furniture.randomness` (default `low`) picks it, read at every reset
   (`mdp/events.py`).
   * `low` / `med` / `high`: FurnitureBench's own levels (`FurnitureSimEnv.reset_env`), exactly.
