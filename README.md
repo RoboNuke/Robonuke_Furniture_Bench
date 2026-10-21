@@ -149,6 +149,17 @@ steps at most); only then does the screw turn begin. `--pivot_dz` raises that sa
 hole axis (its centre above the hole point, ramped in over 5 steps), so the hand presses less. Everything it uses (the leg's and the top's poses) is in the policy
 observation. `--screw_press` defaults to 0.002 (the press sweep's best failure mix).
 
+### Standing the leg up over the hole (`--upright_over_hole`)
+
+By default the lifted leg is stood up in place, above where it was picked (`leg_upright`), then
+carried over the hole and yawed to its placement yaw (`leg_over`, `--insert_yaw`). There, near the
+robot and low, the hand's tilt sweeps its axis past the forearm's (joints 5 and 7 nearly coaxial,
+joint 6 ~ 180 deg) and the IK spins joints 5 and 7 into their limits. `--upright_over_hole`
+stands it up while carrying it to over the hole instead, the placement yaw turned in on the same
+way (one goal, fixed when `leg_upright` starts), so the wrist passes the forearm's axis farther out.
+With the TCP Jacobian (`--ik_jacobian tcp`, position gripper, 64 attempts, the same seed and
+starts): 53/64 succeed and 6 come within 1 deg of a q5 / q6 limit, against 16/64 and 47 without it.
+
 ### Collecting in parallel (`--num_envs`)
 
 `collect_scripted.py --num_envs N` runs N attempts side by side, one expert per env, in
@@ -328,7 +339,8 @@ centre-of-mass velocity, `randomness: port`, the real masses, the position gripp
   Jacobian); `isaaclab` is Isaac Lab's own term, which puts the hand-frame lever on the root-frame
   Jacobian (the TCP taken ~10 cm above the hand while it points down). Every dataset before 171353b
   used `isaaclab`. With `tcp` the scripted expert's wrist runs into its q5 / q6 limits in 76% of
-  attempts (26% success); with `isaaclab` 19% (75%). `collect_scripted.py --ik_jacobian` sets it.
+  attempts (26% success); with `isaaclab` 19% (75%). `collect_scripted.py --ik_jacobian` sets it;
+  `--upright_over_hole` keeps the wrist clear with `tcp` (above).
 
 ### Hybrid force/position control on joint torques
 
