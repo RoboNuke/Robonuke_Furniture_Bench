@@ -171,6 +171,11 @@ class FurnitureCfg:
     #: set -- whatever the robot USD binds, else the sim's default material. (A float, not None: a
     #: config file can only override a field with a value of its type.)
     robot_friction: float = 1.0
+    #: the point the observed EE linear velocity (the ``ee_vel`` term: ``ee_pos_vel``) is of.
+    #: ``ee`` (default since 2026-10-20): the EE point ``ee_pos`` is at (``EE_OFFSET`` on panda_hand,
+    #: FurnitureBench's ``k_ee_link``), what FurnitureBench's / ResiP's sim observes; ``hand_com``
+    #: (every dataset before): panda_hand's centre of mass. Applied by ``apply_observations``
+    ee_vel_point: str = "ee"
     #: the finger drives. Isaac Lab's Franka: stiffness 2000 N/m, effort limit 200 N, each
     #: finger its own drive -- the first pad to touch a leg that is held by its thread shoves
     #: it over (~25 N on a 3 cm lever) before the other pad arrives, and the fingers close
@@ -378,6 +383,7 @@ class AssemblyEnvCfg(ManagerBasedRLEnvCfg):
         self.apply_assets()
         self.apply_friction()
         self.apply_gripper()
+        self.apply_observations()
         self.apply_masses()
         mdp.randomness(self.furniture)  # an unknown furniture.randomness fails here
         if self.furniture.high_layout not in (-1, 0, 1, 2):
@@ -415,6 +421,21 @@ class AssemblyEnvCfg(ManagerBasedRLEnvCfg):
             if term is None:
                 raise ValueError(f"no startup mass event for {name} (events.{name.replace('square_table_', '')}_mass)")
             term.params["mass_distribution_params"] = (mass, mass)
+
+    def apply_observations(self) -> None:
+        """Push ``furniture.ee_vel_point`` into every observation group's ``ee_vel`` term (call
+        again after changing it)."""
+        point = self.furniture.ee_vel_point
+        if point not in ("hand_com", "ee"):
+            raise ValueError(f"furniture.ee_vel_point must be 'hand_com' or 'ee', got {point!r}")
+        for group in vars(self.observations).values():
+            term = getattr(group, "ee_vel", None)
+            if term is None or not hasattr(term, "params"):
+                continue
+            if point == "ee":
+                term.params["offset"] = EE_OFFSET
+            else:
+                term.params.pop("offset", None)
 
     def apply_gripper(self) -> None:
         """Push ``furniture.gripper_*`` into the finger actuator (call again after changing them)."""

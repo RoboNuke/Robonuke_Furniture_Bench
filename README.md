@@ -265,6 +265,12 @@ centre-of-mass velocity, `randomness: port`, the real masses, the position gripp
   startup event; `RESIP_CONTACT_FRICTION` is the 1.0.
   `furniture.table_friction` only reaches the sim's default material (the shapes with no material
   of their own), not the table box, which stays at 0.10.
+* **The EE velocity's point.** ResiP's `ee_pos_vel` is the velocity of `k_ee_link`, the EE point
+  `ee_pos` is at; the `ee_vel` term here reads panda_hand's centre of mass. In the recorded demos the
+  port's velocity is that of a point ~0.17 m up the EE z axis (16-20 mm/s off while the hand turns,
+  vs ~2 mm/s for ResiP's). `furniture.ee_vel_point` `ee` (default; `hand_com` earlier) observes the EE
+  point's velocity (`mdp.ee_vel` with `offset`); the demo collector records the same point
+  (`collect_scripted.ee_vel_b` follows the field).
 * **The reset distribution.** `furniture.randomness` (default `low`) picks it, read at every reset
   (`mdp/events.py`).
   * `low` / `med` / `high`: FurnitureBench's own levels (`FurnitureSimEnv.reset_env`), exactly.

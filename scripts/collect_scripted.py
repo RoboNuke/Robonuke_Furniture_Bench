@@ -250,12 +250,24 @@ def ee_pose_b(env):
 
 
 def ee_vel_b(env):
+    """The EE velocity the policy observes (``furniture.ee_vel_point``, the ``ee_vel`` term's math):
+    the EE point's (``ee``) or panda_hand's centre of mass (``hand_com``), robot-base frame."""
     robot = env.scene["robot"]
     body = robot.find_bodies("panda_hand")[0][0]
-    from isaaclab.utils.math import quat_apply_inverse
+    from isaaclab.utils.math import quat_apply, quat_apply_inverse
 
-    lin = quat_apply_inverse(robot.data.root_quat_w, robot.data.body_lin_vel_w[:, body])
-    ang = quat_apply_inverse(robot.data.root_quat_w, robot.data.body_ang_vel_w[:, body])
+    ang_w = robot.data.body_ang_vel_w[:, body]
+    point = env.cfg.furniture.ee_vel_point
+    if point == "ee":
+        off = torch.tensor(EE_OFFSET, device=env.device, dtype=ang_w.dtype).expand(env.num_envs, -1)
+        r_w = quat_apply(robot.data.body_link_quat_w[:, body], off)
+        lin_w = robot.data.body_link_lin_vel_w[:, body] + torch.linalg.cross(ang_w, r_w, dim=-1)
+    elif point == "hand_com":
+        lin_w = robot.data.body_lin_vel_w[:, body]
+    else:
+        raise ValueError(f"furniture.ee_vel_point {point!r}")
+    lin = quat_apply_inverse(robot.data.root_quat_w, lin_w)
+    ang = quat_apply_inverse(robot.data.root_quat_w, ang_w)
     return lin, ang
 
 

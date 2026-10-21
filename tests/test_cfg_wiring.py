@@ -201,6 +201,27 @@ def test_obstacle_and_robot_friction_default_to_furnituresims(cfg_module):
     assert cfg.events.robot_friction.params["static_friction_range"] == (0.0, 0.0)
 
 
+def test_ee_vel_point_defaults_to_the_ee(cfg_module):
+    """``ee`` (default): the ee_vel term at EE_OFFSET, on every group; ``hand_com``: no offset."""
+    for name in ("OneLegEnvCfg", "OneLegFBEnvCfg", "OneLegFBAbsEnvCfg", "OneLegFBAbsResiPEnvCfg"):
+        cfg = getattr(cfg_module, name)()
+        assert cfg.furniture.ee_vel_point == "ee"
+        assert cfg.observations.policy.ee_vel.params["offset"] == cfg_module.EE_OFFSET
+        cfg.furniture.ee_vel_point = "hand_com"
+        cfg.apply_observations()
+        assert "offset" not in cfg.observations.policy.ee_vel.params
+        cfg.furniture.ee_vel_point = "ee"
+        cfg.apply_observations()
+        assert cfg.observations.policy.ee_vel.params["offset"] == cfg_module.EE_OFFSET
+        assert cfg.observations.policy.ee_vel.params["asset_cfg"].body_names == "panda_hand"
+        cfg.furniture.ee_vel_point = "hand_com"
+        cfg.apply_observations()
+        assert "offset" not in cfg.observations.policy.ee_vel.params
+    cfg.furniture.ee_vel_point = "tcp"
+    with pytest.raises(ValueError, match="ee_vel_point"):
+        cfg.apply_observations()
+
+
 def test_reset_and_masses_default_to_furniturebench(cfg_module):
     """Every cfg, apply_resip included: ``furniture.randomness`` FurnitureBench's ``low`` (run by the
     reset_parts term) and ``part_masses`` what FurnitureSim simulates; bad values fail at construction."""

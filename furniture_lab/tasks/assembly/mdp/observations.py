@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import torch
 
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.utils.math import combine_frame_transforms, quat_apply_inverse, quat_mul, subtract_frame_transforms
+from isaaclab.utils.math import combine_frame_transforms, quat_apply, quat_apply_inverse, quat_mul, subtract_frame_transforms
 
 from .state import parts_pose_b
 
@@ -52,12 +52,24 @@ def ee_quat(
 def ee_vel(
     env: "ManagerBasedRLEnv",
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="panda_hand"),
+    offset: tuple | None = None,
 ) -> torch.Tensor:
-    """Linear then angular velocity of the end-effector body, robot-base frame, (N, 6)."""
+    """Linear then angular velocity of the end-effector body, robot-base frame, (N, 6).
+
+    The linear velocity is that of the body's centre of mass (``offset`` None), or of the point
+    ``offset`` in the body's link frame -- ``EE_OFFSET`` is FurnitureBench's ``k_ee_link``, where
+    ``ee_pos`` is and whose velocity FurnitureBench's sim reports (``furniture.ee_vel_point``)."""
     robot = env.scene[asset_cfg.name]
     body = asset_cfg.body_ids[0]
-    lin = quat_apply_inverse(robot.data.root_quat_w, robot.data.body_lin_vel_w[:, body])
-    ang = quat_apply_inverse(robot.data.root_quat_w, robot.data.body_ang_vel_w[:, body])
+    ang_w = robot.data.body_ang_vel_w[:, body]
+    if offset is None:
+        lin_w = robot.data.body_lin_vel_w[:, body]
+    else:
+        off = torch.tensor(offset, device=env.device, dtype=ang_w.dtype).expand(env.num_envs, -1)
+        r_w = quat_apply(robot.data.body_link_quat_w[:, body], off)
+        lin_w = robot.data.body_link_lin_vel_w[:, body] + torch.linalg.cross(ang_w, r_w, dim=-1)
+    lin = quat_apply_inverse(robot.data.root_quat_w, lin_w)
+    ang = quat_apply_inverse(robot.data.root_quat_w, ang_w)
     return torch.cat([lin, ang], dim=-1)
 
 
