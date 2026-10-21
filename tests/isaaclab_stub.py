@@ -152,8 +152,14 @@ def install():
     dik_action = _kwargs_class("DifferentialInverseKinematicsActionCfg")
     dik_action.OffsetCfg = _kwargs_class("OffsetCfg")
     osc_action.OffsetCfg = _kwargs_class("OffsetCfg")
+    class BinaryJointAction:  # the real one's state, enough for a subclass's apply_actions
+        def __init__(self, cfg, env):
+            self.cfg = cfg
+
+    module("isaaclab.envs.mdp.actions.binary_joint_actions", BinaryJointAction=BinaryJointAction)
     module(
         "isaaclab.envs.mdp.actions.actions_cfg",
+        BinaryJointActionCfg=_kwargs_class("BinaryJointActionCfg"),
         BinaryJointPositionActionCfg=_kwargs_class("BinaryJointPositionActionCfg"),
         OperationalSpaceControllerActionCfg=osc_action,
         DifferentialInverseKinematicsActionCfg=dik_action,

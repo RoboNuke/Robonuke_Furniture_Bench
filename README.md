@@ -295,6 +295,17 @@ centre-of-mass velocity, `randomness: port`, the real masses, the position gripp
   * `port`: this port's earlier reset -- every part uniform ±1.5 cm / ±15° yaw, redrawn while two
     footprints overlap (no margin, no limits, 20 tries), the obstacles by `furniture.obstacle_offset`
     (used by `port` only), the arm at its reset joints.
+* **The gripper.** `furniture.gripper_mode` `effort` (what `apply_resip` sets since 2026-10-20) is
+  ResiP's: the finger drive has no gains, each finger gets a constant +13 N while the command is open
+  and -13 N while closed (`gripper_effort`; `mdp/gripper.py`'s binary effort term), the finger travel
+  is capped at 0.0325 m (65 mm open). Their fingers move 11.3 mm of separation per step, opening and
+  closing (their demos); here the same comes from `gripper_velocity_limit` 0.057 m/s
+  (`RESIP_FINGER_SPEED`): their joint friction 15 freezes a free finger under this PhysX (0.55 mm per
+  step) and nothing up to 12 slows it, so `gripper_joint_friction` is 8 (it resists the leg pushing a
+  closed finger open). Effort mode needs `furniture.robot_self_collisions` false: Isaac Lab's Franka
+  USD has finger 2 touch another robot link past ~24.7 mm, which a 13 N effort cannot push through
+  (it opened to 57 mm). `position` is the port's earlier gripper: a 600 N/m drive capped at 13 N on
+  the open / close target, a 0.2 m/s cap -- it closed and opened in about one step.
 * **The part meshes.** `furniture.part_assets` (default `furniturebench`) picks the part USDs. `uwlab`: the
   repo's UWLab files, each part split into convex hulls (the top's plate and walls, the leg's body)
   and SDF meshes at PhysX's default resolution (256) on the hole blocks and the bolt.

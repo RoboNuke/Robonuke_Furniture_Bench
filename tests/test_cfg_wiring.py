@@ -242,6 +242,30 @@ def test_reset_and_masses_default_to_furniturebench(cfg_module):
             cfg_module.OneLegEnvCfg(furniture=cfg_module.FurnitureCfg(task="one_leg", **bad))
 
 
+def test_gripper_mode_switches_the_drive_the_term_and_the_travel(cfg_module):
+    """``position`` (the port tasks' default): the PD drive and the binary position term, no
+    friction or travel change; ``effort``: ResiP's; and back."""
+    cfg = cfg_module.OneLegFBAbsEnvCfg()
+    hand = cfg.scene.robot.actuators["panda_hand"]
+    assert cfg.furniture.gripper_mode == "position" and hand.stiffness == 600.0 and hand.friction is None
+    assert cfg.actions.fb.gripper.close_command_expr == {"panda_finger_joint.*": 0.0} and cfg.events.finger_limits is None
+    cfg.furniture.gripper_mode, cfg.furniture.gripper_effort = "effort", 10.0
+    with pytest.raises(ValueError, match="robot_self_collisions"):
+        cfg.apply_gripper()  # effort needs the robot's self-collisions off
+    cfg.furniture.robot_self_collisions = False
+    cfg.apply_gripper()
+    assert (hand.stiffness, hand.damping, hand.friction, hand.dynamic_friction) == (0.0, 0.0, 8.0, 8.0)
+    assert cfg.actions.fb.gripper.close_command_expr == {"panda_finger_joint.*": -10.0}
+    assert cfg.events.finger_limits.params["upper"] == pytest.approx(frames.MAX_GRIPPER_WIDTH / 2)
+    cfg.furniture.gripper_mode = "position"
+    cfg.apply_gripper()
+    assert hand.stiffness == 600.0 and hand.friction is None and cfg.events.finger_limits is None
+    assert cfg.actions.fb.gripper.open_command_expr == {"panda_finger_joint.*": pytest.approx(0.0325)}
+    cfg.furniture.gripper_mode = "torque"
+    with pytest.raises(ValueError, match="gripper_mode"):
+        cfg.apply_gripper()
+
+
 def test_part_assets_switch_the_usds_the_mesh_frame_and_the_nominal_poses(cfg_module):
     from furniture_lab.tasks.furniture import catalog
 
@@ -342,8 +366,18 @@ def test_resip_sim_cfgs(cfg_module):
         f = cfg.furniture
         assert (f.part_friction, f.table_friction, f.gripper_effort_limit, f.gripper_margin) == (0.15, 0.10, 13.0, 0.019)
         assert f.obstacle_offset == 0.02 and cfg.events.reset_obstacles is not None
-        assert f.gripper_velocity_limit == 0.2 and cfg.scene.robot.actuators["panda_hand"].velocity_limit_sim == 0.2
-        assert cfg.scene.robot.actuators["panda_hand"].stiffness == 600.0 and cfg.scene.robot.actuators["panda_hand"].damping == 40.0
+        assert f.gripper_velocity_limit == 0.057 and cfg.scene.robot.actuators["panda_hand"].velocity_limit_sim == 0.057
+        # ResiP's gripper: effort mode, +-13 N per finger, travel 0.0325, their finger speed, self-collisions off
+        hand = cfg.scene.robot.actuators["panda_hand"]
+        assert f.gripper_mode == "effort" and (hand.stiffness, hand.damping) == (0.0, 0.0)
+        assert (hand.friction, hand.dynamic_friction) == (8.0, 8.0) and f.gripper_effort == 13.0
+        assert f.robot_self_collisions is False
+        grip = cfg.actions.fb.gripper if hasattr(cfg.actions, "fb") else cfg.actions.gripper
+        assert grip.class_type.__name__ == "BinaryJointEffortAction"
+        assert grip.open_command_expr == {"panda_finger_joint.*": 13.0} and grip.close_command_expr == {"panda_finger_joint.*": -13.0}
+        lim = cfg.events.finger_limits
+        assert lim.mode == "startup" and lim.params["upper"] == 0.0325
+        assert lim.params["asset_cfg"]._args == ("robot",) and lim.params["asset_cfg"].joint_names == "panda_finger_joint.*"
         arm = cfg.actions.fb.arm if hasattr(cfg.actions, "fb") else cfg.actions.arm
         assert arm.controller.use_relative_mode is (not absolute) and arm.controller.ik_method == "pinv"
         assert arm.class_type.__name__ == "TcpDifferentialIKAction"  # the TCP Jacobian fixed
@@ -369,12 +403,13 @@ def test_the_hybrid_cfg_is_resip_with_the_arm_on_joint_torques(cfg_module):
     for group in ("panda_shoulder", "panda_forearm"):
         assert cfg.scene.robot.actuators[group].stiffness == 0.0
         assert cfg.scene.robot.actuators[group].damping == 0.0
-    assert cfg.scene.robot.actuators["panda_hand"].stiffness > 0
+    # the fingers keep ResiP's effort-mode gripper (no drive gains, +-13 N), not the arm's torque law
+    assert cfg.furniture.gripper_mode == "effort" and cfg.scene.robot.actuators["panda_hand"].friction == 8.0
     assert not hasattr(cfg.actions, "arm") and not hasattr(cfg.actions, "fb")
     term = cfg.actions.hybrid
     assert term.class_type.__name__ == "HybridTorqueAbsAction"
     assert term.body_name == "panda_hand" and term.joint_names == ["panda_joint.*"]
-    assert term.gripper is not None
+    assert term.gripper is not None and term.gripper.class_type.__name__ == "BinaryJointEffortAction"
     assert cfg.furniture.gripper_margin == 0.019
     # the plain ResiP cfg is untouched by the hybrid one
     assert cfg_module.OneLegFBAbsResiPEnvCfg().scene.robot.actuators["panda_shoulder"].stiffness == 1000.0

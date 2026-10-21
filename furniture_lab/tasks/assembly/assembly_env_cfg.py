@@ -187,6 +187,21 @@ class FurnitureCfg:
     #: max finger joint speed (m/s per finger; PhysX max joint velocity), None = the asset's.
     #: (ResiP's effort-mode fingers -- 13 N against DOF friction 15 -- close at ~0.057 m/s)
     gripper_velocity_limit: Optional[float] = None
+    #: ``position``: the finger drive is the PD above (``gripper_stiffness`` / ``gripper_damping``,
+    #: capped at ``gripper_effort_limit``) on the binary open / close target. ``effort`` (what
+    #: ``apply_resip`` sets): ResiP's FurnitureRLSimEnv gripper (``mdp/gripper.py``) -- no drive gains,
+    #: a constant ``+gripper_effort`` N on each finger while open and ``-gripper_effort`` while closed,
+    #: the finger joints' friction coefficient ``gripper_joint_friction`` (static and dynamic), the
+    #: travel capped at half ``frames.MAX_GRIPPER_WIDTH`` (65 mm open); ``gripper_velocity_limit``
+    #: still applies. Needs ``robot_self_collisions`` off (see there).
+    gripper_mode: str = "position"
+    gripper_effort: float = 13.0
+    #: effort mode's finger joint friction (PhysX: resists up to coefficient x the force the joint
+    #: transmits). ResiP's Isaac Gym sets 15; under this PhysX (5) 15 freezes a free finger against the
+    #: 13 N (0.55 mm per step) and anything up to 12 does not slow it at all, so their finger speed
+    #: comes from ``gripper_velocity_limit`` (``RESIP_FINGER_SPEED``) and this keeps a friction that
+    #: resists the leg pushing a closed finger open (8 x the contact load) while a free finger moves
+    gripper_joint_friction: float = 8.0
     #: the part USDs (``catalog.ASSET_SETS``). ``furniturebench`` (default since 2026-10-20):
     #: FurnitureBench's own OBJs converted as ResiP's URDFs give them to Isaac Gym
     #: (``assets/FurnitureBench``, ``tools/convert_assets.py``): one collision mesh per part, an SDF at
@@ -198,6 +213,11 @@ class FurnitureCfg:
     #: gives 0.32 mm, about the thread's 0.38 mm crest-to-root clearance). ``apply_assets`` sets the
     #: USDs, ``mesh_frame`` and the nominal poses
     part_assets: str = "furniturebench"
+    #: the robot's self-collisions (Isaac Lab's Franka: on). Isaac Lab's Franka USD has finger 2 touch
+    #: another of the robot's links once it opens past ~24.7 mm: a position drive pushes through, a
+    #: 13 N effort stalls there (the gripper opens to 57 mm, not 65), so effort mode needs them off
+    #: (``apply_resip`` turns them off; ResiP's own Franka opens to 65 mm)
+    robot_self_collisions: bool = True
     #: the FB action terms' gripper hysteresis: the command flips only when the action's sign
     #: changes and its size exceeds this (ResiP / FurnitureRLSimEnv's grasp_margin, 0.019);
     #: 0 = flip on the sign, Isaac Lab's binary term as is
@@ -314,6 +334,8 @@ class EventCfg:
     leg4_friction = _friction_event("square_table_leg4", PART_FRICTION)
     # every robot shape's friction: set by apply_friction from furniture.robot_friction (< 0: off)
     robot_friction: Optional[EventTerm] = None
+    # the finger travel capped at ResiP's 0.0325 m: set by apply_gripper in effort mode (else off)
+    finger_limits: Optional[EventTerm] = None
 
     # -- reset, in this order: everything to its default, then the obstacles offset and the
     #    parts perturbed, then
@@ -438,15 +460,56 @@ class AssemblyEnvCfg(ManagerBasedRLEnvCfg):
                 term.params.pop("offset", None)
 
     def apply_gripper(self) -> None:
-        """Push ``furniture.gripper_*`` into the finger actuator (call again after changing them)."""
+        """Push ``furniture.gripper_*`` into the finger actuator, the gripper action term(s) and the
+        finger travel (call again after changing them)."""
+        f = self.furniture
+        if f.gripper_mode not in ("position", "effort"):
+            raise ValueError(f"furniture.gripper_mode must be 'position' or 'effort', got {f.gripper_mode!r}")
+        effort = f.gripper_mode == "effort"
+        if effort and f.robot_self_collisions:
+            raise ValueError(
+                "furniture.gripper_mode 'effort' needs furniture.robot_self_collisions false: with them on, "
+                "Isaac Lab's Franka finger 2 stalls at ~24.7 mm against another link under a 13 N effort"
+            )
+        props = getattr(self.scene.robot.spawn, "articulation_props", None)
+        if props is not None:
+            props.enabled_self_collisions = bool(f.robot_self_collisions)
         act = self.scene.robot.actuators["panda_hand"]
-        act.stiffness = float(self.furniture.gripper_stiffness)
-        act.damping = float(self.furniture.gripper_damping)
+        act.stiffness = 0.0 if effort else float(f.gripper_stiffness)
+        act.damping = 0.0 if effort else float(f.gripper_damping)
         for name in ("effort_limit", "effort_limit_sim"):
             if hasattr(act, name):
-                setattr(act, name, float(self.furniture.gripper_effort_limit))
-        if self.furniture.gripper_velocity_limit is not None:
-            act.velocity_limit_sim = float(self.furniture.gripper_velocity_limit)
+                setattr(act, name, float(f.gripper_effort if effort else f.gripper_effort_limit))
+        # the joint friction: ResiP's in effort mode; the asset's (None) otherwise, as always
+        act.friction = float(f.gripper_joint_friction) if effort else None
+        act.dynamic_friction = float(f.gripper_joint_friction) if effort else None
+        if f.gripper_velocity_limit is not None:
+            act.velocity_limit_sim = float(f.gripper_velocity_limit)
+        # the gripper term inside each action group that has one: the effort term (+-gripper_effort),
+        # or back to the task's binary position term when an effort one is there
+        for group in (self.actions, getattr(self.actions, "fb", None), getattr(self.actions, "hybrid", None)):
+            term = getattr(group, "gripper", None) if group is not None else None
+            if term is None:
+                continue
+            is_effort = getattr(term, "class_type", None) is mdp.BinaryJointEffortAction
+            if effort:
+                group.gripper = mdp.BinaryJointEffortActionCfg(
+                    asset_name="robot",
+                    joint_names=["panda_finger_joint.*"],
+                    open_command_expr={"panda_finger_joint.*": float(f.gripper_effort)},
+                    close_command_expr={"panda_finger_joint.*": -float(f.gripper_effort)},
+                )
+            elif is_effort:
+                group.gripper = ActionsCfg().gripper
+        self.events.finger_limits = (
+            EventTerm(
+                func=mdp.set_finger_limits,
+                mode="startup",
+                params={"upper": frames.MAX_GRIPPER_WIDTH / 2, "asset_cfg": SceneEntityCfg("robot", joint_names="panda_finger_joint.*")},
+            )
+            if effort
+            else None
+        )
 
     def apply_friction(self) -> None:
         """Push ``furniture.part_friction`` / ``table_friction`` into the startup friction
@@ -617,8 +680,11 @@ RESIP_ARM_STIFFNESS = 1000.0
 RESIP_ARM_DAMPING = 200.0
 #: ResiP's obstacle randomization at low randomness (m, uniform +- in x and y, all three together)
 RESIP_OBSTACLE_OFFSET = 0.02
-#: the finger speed limit (m/s per finger) of ``apply_resip``
+#: the finger speed limit (m/s per finger) of the port's earlier position-mode gripper
 RESIP_GRIPPER_SPEED = 0.2
+#: ResiP's fingers' speed (m/s each), measured in their demos: 11.3 mm of finger separation per 0.1 s
+#: step opening and closing (their 13 N effort against their joint friction); effort mode's cap
+RESIP_FINGER_SPEED = 0.057
 #: the friction of every shape ResiP's sim sets none on -- the obstacles and the whole Franka,
 #: fingers included: Isaac Gym's asset default (their URDFs loaded and read back, 1.0 on every
 #: shape). Not applied by ``apply_resip``; ``furniture.obstacle_friction`` / ``robot_friction`` opt in
@@ -658,13 +724,15 @@ def apply_resip(cfg) -> None:
         cfg.scene.robot.actuators[group].damping = RESIP_ARM_DAMPING
     f = cfg.furniture
     f.part_friction, f.table_friction = 0.15, 0.10
-    # finger drive capped at ResiP's 13 N; 600 N/m (as the port: a stiffer drive pushed the
-    # fingers into the leg), ~9 N squeeze on a 30 mm leg, and a 0.2 m/s
-    # finger speed limit. ResiP's own fingers are effort mode (13 N against DOF friction 15,
-    # ~0.057 m/s); an emulation of that (10000 N/m, speed capped at 0.057) dropped the leg in
-    # the replays, so this is the setting the port's demos are recorded with
+    # ResiP's own gripper: effort mode, +-13 N per finger, the finger travel capped at 0.0325
+    # (mdp/gripper.py), moving at their fingers' measured speed (RESIP_FINGER_SPEED); the robot's
+    # self-collisions off (see FurnitureCfg.robot_self_collisions). Datasets before 2026-10-20 were
+    # recorded with gripper_mode "position": a 600 N/m drive capped at 13 N (the spring and damping
+    # below) and a 0.2 m/s cap, which closed and opened in about one step
+    f.gripper_mode, f.gripper_effort, f.gripper_joint_friction = "effort", 13.0, 8.0
+    f.robot_self_collisions = False
     f.gripper_stiffness, f.gripper_damping, f.gripper_effort_limit = 600.0, 40.0, 13.0
-    f.gripper_velocity_limit = RESIP_GRIPPER_SPEED
+    f.gripper_velocity_limit = RESIP_FINGER_SPEED
     f.gripper_margin = 0.019
     f.obstacle_offset = RESIP_OBSTACLE_OFFSET
     cfg.apply_friction()

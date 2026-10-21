@@ -117,6 +117,11 @@ parser.add_argument(
     "kick_high = ResiP's FurnitureRLSimEnv levels (a kick per part, arm-joint noise, the level's obstacle offset)",
 )
 parser.add_argument(
+    "--gripper_mode", choices=["effort", "position"], default=None,
+    help="the gripper (default: the task's, ResiP's effort mode). position = the port's earlier gripper, what "
+    "pivot_vary_dart* were collected with: a 600 N/m drive capped at 13 N, 0.2 m/s, the robot's self-collisions on",
+)
+parser.add_argument(
     "--part_assets", default=None,
     help="the part USDs (furniture.part_assets; default: the task's, furniturebench): furniturebench | "
     "furniturebench_top1024 (the top's SDF at 1024) | uwlab",
@@ -358,6 +363,11 @@ def main() -> None:
     if args.part_assets is not None:
         cfg.furniture.part_assets = args.part_assets
     cfg.apply_assets()
+    if args.gripper_mode == "position":  # the port's earlier gripper, with the self-collisions it had
+        cfg.furniture.gripper_mode, cfg.furniture.robot_self_collisions = "position", True
+        cfg.furniture.gripper_velocity_limit = 0.2
+    elif args.gripper_mode == "effort":
+        cfg.furniture.gripper_mode, cfg.furniture.robot_self_collisions = "effort", False
     if args.part_friction is not None:
         cfg.furniture.part_friction = args.part_friction
     if args.table_friction is not None:

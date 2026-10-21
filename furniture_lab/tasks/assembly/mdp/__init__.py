@@ -2,6 +2,7 @@
 
 from isaaclab.envs.mdp import *  # noqa: F401, F403
 
+from .gripper import BinaryJointEffortAction, BinaryJointEffortActionCfg, set_finger_limits  # noqa: F401
 from .events import OBSTACLE_NAMES, RANDOMNESS_LEVELS, RESIP_RANDOMNESS, PartKick, fb_high_layout, fb_layout, randomize_obstacles, randomize_parts_pose, randomness, reset_assembly_tracker, resip_level, resip_reset  # noqa: F401
 from .actions import arm_scales, FurnitureBenchAbsAction, FurnitureBenchAbsActionCfg, FurnitureBenchAction, FurnitureBenchActionCfg  # noqa: F401
 from .hybrid import HybridTorqueAbsAction, HybridTorqueAbsActionCfg, HybridTorqueCfg  # noqa: F401
