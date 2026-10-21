@@ -121,6 +121,40 @@ put in a group (none by default, so the task ids' observations are unchanged).
 prints the estimate next to PhysX's joint reaction wrench on `panda_hand`, both as the
 external wrench on the EE in the base frame; `--csv` saves it.
 
+`furniture.log_wrench: true` publishes `env.wrench.filtered` every step as
+`infos["eval_state"]["ee_wrench"]` (as it was after the step's terminations, before a reset
+zeroes it), so a robonuke_rl_core eval's per-step parquet holds it as six columns
+(`eval_state/ee_wrench_0..5`).
+
+### One_leg's task phases (`furniture.track_phases`, for eval playback)
+
+`furniture_lab/tasks/assembly/phases.py` tracks, per env and per step, which phase of one_leg the
+policy is in -- from the scene, not from gripper commands (that is `failures.py`), so it reads
+the same for a learned policy -- forward only: **Corner** (done once the gripper lets go of the
+top after holding it, however well the top sits in the corner: its distance from `failures.py`'s
+corner goal is a measurement, and its value when let go is the `phase/corner_release_mm` episode
+metric), **Grasp** (done once leg 4 is held and has risen
+`phase_lift` above where it lay), **Insert** (done once the fingers are open and the leg has
+stayed in its hole for `phase_hold_steps`), **Screw** (until the assembled check; the leg's turn
+since Screw began is published positive in the screwing direction), then
+success / failure / timeout. Every step it publishes the phase and the measurements each phase is
+judged by, with their goals, in `infos["eval_state"]` (the eval's parquet; hybrid_demos' `one_leg`
+video overlay draws them), and at episode end the furthest phase and the step each phase was done
+on in the episode metrics (the eval's `summary.yaml`).
+
+| `furniture.` field | default | meaning |
+|---|---|---|
+| `track_phases` | false | one_leg only: track and publish the phases |
+| `phase_top_grip_width` | 0.02 | m: the gripper holds the top with the fingers closed narrower than this (it grips the top's edge 5-10 mm apart) ... |
+| `phase_top_grip_dist` | 0.13 | m: ... and the TCP within this of the top's centre (70-85 mm when gripping its edge) ... |
+| `phase_top_grip_height` | 0.03 | m: ... and at most this above it. Corner is done when the fingers then open wider than `phase_release_width` |
+| `phase_lift` | 0.03 | m: the held leg's rise above where it lay at the start that completes Grasp |
+| `phase_held_dist` | 0.03 | m: the leg counts as held with the TCP this close to its centre |
+| `phase_release_width` | 0.05 | m: the fingers count as open (let go of the top, or of the leg) wider than this |
+| `phase_hole_xz` / `phase_tilt_deg` | 0.013 / 16 | the leg is in its hole within this of the hole's axis and this tilt from the seat axis (`failures.py`'s) |
+| `phase_hold_steps` | 10 | steps the released leg must stay in its hole to complete Insert |
+| `phase_force_scale` | 50 | N, display only: the overlay's force bar is full at this |
+
 ### Checking the FB interface against a demo
 
 `scripts/parity_check.py --demo <pkl> --headless` (`--task Isaac-Furniture-OneLeg-FBAbs-v0` for the

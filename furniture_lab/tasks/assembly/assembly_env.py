@@ -14,6 +14,11 @@ has to run every physics substep, and a manager-based env gives its terms no sub
 the action manager's ``apply_action`` is called once per substep, just before the sim
 steps, so the env runs the estimator from there -- the moment Forge computes its force
 sensor too.
+
+Two opt-in eval channels, both read after the terminations and before the resets clear
+anything (the termination manager's ``compute`` is wrapped for it): ``furniture.log_wrench``
+publishes the wrench estimate as ``infos["eval_state"]["ee_wrench"]`` (six columns of an eval's
+per-step parquet), ``furniture.track_phases`` one_leg's task phases (``phases.py``).
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ from isaaclab.envs import ManagerBasedRLEnv
 
 from .mdp.events import randomness
 from .mdp.state import tracker
+from .phases import OneLegPhases
 from .wrench import JointTorqueWrench
 
 
@@ -35,6 +41,10 @@ class AssemblyEnv(ManagerBasedRLEnv):
 
     def __init__(self, cfg, render_mode: str | None = None, **kwargs):
         self._episode_success = None
+        #: furniture.track_phases: one_leg's phase tracker (phases.py); furniture.log_wrench: the
+        #: wrench estimate as it was after the step's terminations (before any reset zeroed it)
+        self.phases = None
+        self._wrench_out = None
         #: ResiP's reset kick on the parts (furniture.randomness kick_*), made by its
         #: reset event (mdp.events.resip_reset); None until then
         self.part_kick = None
@@ -68,6 +78,21 @@ class AssemblyEnv(ManagerBasedRLEnv):
             self.wrench.update()
 
         self.action_manager.apply_action = apply_action_then_estimate
+        if cfg.furniture.track_phases:
+            self.phases = OneLegPhases(self, cfg.furniture)
+        if self.phases is not None or cfg.furniture.log_wrench:
+            compute = self.termination_manager.compute
+
+            def compute_then_track():
+                dones = compute()
+                # after the physics and the terminations, before the resets clear anything
+                if cfg.furniture.log_wrench:
+                    self._wrench_out = self.wrench.filtered.clone()
+                if self.phases is not None:
+                    self.phases.update()
+                return dones
+
+            self.termination_manager.compute = compute_then_track
 
     def _reset_idx(self, env_ids: Sequence[int]):
         if self._episode_success is not None and len(env_ids) > 0:
@@ -76,6 +101,8 @@ class AssemblyEnv(ManagerBasedRLEnv):
             if self.cfg.furniture.log_resets:
                 self._log_reset(env_ids)
             self.wrench.reset(env_ids)
+            if self.phases is not None:
+                self.phases.reset(env_ids)
         super()._reset_idx(env_ids)
 
     def _log_reset(self, env_ids: Sequence[int]) -> None:
@@ -96,4 +123,12 @@ class AssemblyEnv(ManagerBasedRLEnv):
     def step(self, action: torch.Tensor):
         obs, rew, terminated, truncated, extras = super().step(action)
         extras["episode_metrics_to_log"] = {"episode/success": self._episode_success}
+        state = {}
+        if self._wrench_out is not None:
+            state["ee_wrench"] = self._wrench_out
+        if self.phases is not None:
+            extras["episode_metrics_to_log"].update(self.phases.episode)
+            state.update(self.phases.state)
+        if state:
+            extras.setdefault("eval_state", {}).update(state)
         return obs, rew, terminated, truncated, extras

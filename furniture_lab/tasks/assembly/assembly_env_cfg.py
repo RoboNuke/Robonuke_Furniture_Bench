@@ -147,6 +147,36 @@ class FurnitureCfg:
     #: print a line on every reset (which envs, after how many steps, which termination
     #: fired). For watching; off for training, where it would print every step.
     log_resets: bool = False
+    #: publish the wrench estimate (``env.wrench.filtered``: force N then torque N m, robot-base
+    #: frame) every step as ``infos["eval_state"]["ee_wrench"]``: six columns of an eval's
+    #: per-step parquet (``assembly_env.py``)
+    log_wrench: bool = False
+    #: one_leg only: track the task phase per env (``assembly/phases.py``): Corner -> Grasp ->
+    #: Insert -> Screw, forward only, then success / failure / timeout; published in
+    #: ``infos["eval_state"]`` every step (the parquet, the ``one_leg`` video overlay) and in the
+    #: episode metrics at the end. The phase_* fields below are its thresholds:
+    track_phases: bool = False
+    #: Corner is done once the gripper lets go of the top: it held the top (fingers closed narrower
+    #: than ``phase_top_grip_width`` m with the TCP within ``phase_top_grip_dist`` m of the top's
+    #: centre and at most ``phase_top_grip_height`` m above it), then opened wider than
+    #: ``phase_release_width``. The top's distance from the corner goal is only measured
+    phase_top_grip_width: float = 0.02
+    phase_top_grip_dist: float = 0.13
+    phase_top_grip_height: float = 0.03
+    #: m: Grasp is done once leg 4 is held (the TCP within ``phase_held_dist`` of its centre) and
+    #: has risen ``phase_lift`` above where it lay at the episode's start
+    phase_lift: float = 0.03
+    phase_held_dist: float = 0.03
+    #: Insert is done once the fingers are open wider than ``phase_release_width`` (m; Corner's let
+    #: go as well) and the leg
+    #: has stayed in its hole (off-axis <= ``phase_hole_xz`` m, tilt <= ``phase_tilt_deg`` from the
+    #: seat axis) for ``phase_hold_steps`` consecutive steps
+    phase_release_width: float = 0.05
+    phase_hole_xz: float = 0.013
+    phase_tilt_deg: float = 16.0
+    phase_hold_steps: int = 10
+    #: display only: the overlay's force bar is full at this (N)
+    phase_force_scale: float = 50.0
     #: each part's mass (kg), in ``part_names`` order, set by the startup mass events
     #: (``apply_masses``). Default: what FurnitureSim simulates (``ISAAC_GYM_MASS``: top 411.5 g,
     #: legs 26.4 / 26.5 / 26.4 / 29.1 g); ``PartSpec.mass`` holds the real parts' 151 g / 23.1 g
