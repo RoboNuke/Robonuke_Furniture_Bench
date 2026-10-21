@@ -122,6 +122,11 @@ parser.add_argument(
     "pivot_vary_dart* were collected with: a 600 N/m drive capped at 13 N, 0.2 m/s, the robot's self-collisions on",
 )
 parser.add_argument(
+    "--ik_jacobian", choices=["tcp", "isaaclab"], default=None,
+    help="--sim resip's IK Jacobian (default: the task's, tcp). isaaclab = Isaac Lab's own term, what the datasets "
+    "before 171353b (pivot_vary_dart_v2 and earlier) were collected with",
+)
+parser.add_argument(
     "--part_assets", default=None,
     help="the part USDs (furniture.part_assets; default: the task's, furniturebench): furniturebench | "
     "furniturebench_top1024 (the top's SDF at 1024) | uwlab",
@@ -368,6 +373,9 @@ def main() -> None:
         cfg.furniture.gripper_velocity_limit = 0.2
     elif args.gripper_mode == "effort":
         cfg.furniture.gripper_mode, cfg.furniture.robot_self_collisions = "effort", False
+    if args.ik_jacobian is not None:
+        cfg.furniture.ik_jacobian = args.ik_jacobian
+    cfg.apply_ik()
     if args.part_friction is not None:
         cfg.furniture.part_friction = args.part_friction
     if args.table_friction is not None:

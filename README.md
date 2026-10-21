@@ -323,6 +323,12 @@ centre-of-mass velocity, `randomness: port`, the real masses, the position gripp
   volume (read back from their sim), not the `sim_config` comments' 151 g / 23.1 g (`PartSpec.mass`,
   the real parts). The inertia is the USD's, scaled to the mass (`recompute_inertia`); their parts
   carry no damping, the port's the USD's.
+* **The IK Jacobian.** `furniture.ik_jacobian` (ResiP tasks' differential-IK arm term, `dik_arm_cfg`):
+  `tcp` (default, 171353b) rotates the TCP lever into the root frame (`mdp/tcp_ik.py`, the true TCP
+  Jacobian); `isaaclab` is Isaac Lab's own term, which puts the hand-frame lever on the root-frame
+  Jacobian (the TCP taken ~10 cm above the hand while it points down). Every dataset before 171353b
+  used `isaaclab`. With `tcp` the scripted expert's wrist runs into its q5 / q6 limits in 76% of
+  attempts (26% success); with `isaaclab` 19% (75%). `collect_scripted.py --ik_jacobian` sets it.
 
 ### Hybrid force/position control on joint torques
 

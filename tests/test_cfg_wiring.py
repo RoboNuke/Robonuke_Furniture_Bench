@@ -395,6 +395,30 @@ def test_resip_sim_cfgs(cfg_module):
     assert port.decimation == 6 and port.scene.robot.actuators["panda_shoulder"].stiffness == 0.0
 
 
+def test_ik_jacobian_switches_the_arm_term(cfg_module):
+    """furniture.ik_jacobian: tcp (default) = TcpDifferentialIKAction, isaaclab = Isaac Lab's own term,
+    on every ResiP interface; anything else fails; the OSC cfgs are left alone."""
+    for name in ("OneLegResiPEnvCfg", "OneLegFBResiPEnvCfg", "OneLegFBAbsResiPEnvCfg"):
+        cfg = getattr(cfg_module, name)()
+        arm = cfg.actions.fb.arm if hasattr(cfg.actions, "fb") else cfg.actions.arm
+        assert cfg.furniture.ik_jacobian == "tcp" and arm.class_type.__name__ == "TcpDifferentialIKAction"
+        cfg.furniture.ik_jacobian = "isaaclab"
+        cfg.apply_ik()
+        assert arm.class_type.__name__ == "DifferentialInverseKinematicsAction"
+        cfg.furniture.ik_jacobian = "tcp"
+        cfg.apply_ik()
+        assert arm.class_type.__name__ == "TcpDifferentialIKAction"
+        cfg.furniture.ik_jacobian = "TCP"
+        with pytest.raises(ValueError, match="ik_jacobian"):
+            cfg.apply_ik()
+    port = cfg_module.OneLegFBAbsEnvCfg()
+    arm = port.actions.fb.arm
+    before = getattr(arm, "class_type", None)
+    port.furniture.ik_jacobian = "isaaclab"
+    port.apply_ik()
+    assert port.actions.fb.arm is arm and getattr(arm, "class_type", None) is before
+
+
 def test_the_hybrid_cfg_is_resip_with_the_arm_on_joint_torques(cfg_module):
     """``OneLegFBAbsResiPHybridEnvCfg``: ResiP's sim and interface, the arm's drives with no
     stiffness or damping, one hybrid torque term (no IK arm term beside it) and the gripper."""

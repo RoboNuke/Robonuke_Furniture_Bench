@@ -218,6 +218,12 @@ class FurnitureCfg:
     #: 13 N effort stalls there (the gripper opens to 57 mm, not 65), so effort mode needs them off
     #: (``apply_resip`` turns them off; ResiP's own Franka opens to 65 mm)
     robot_self_collisions: bool = True
+    #: the ResiP arm controller's Jacobian (``dik_arm_cfg``): "tcp" = the TCP lever rotated into the
+    #: root frame (``mdp.tcp_ik.TcpDifferentialIKAction``, since 171353b on 2026-10-20); "isaaclab" =
+    #: Isaac Lab's own term, which puts the hand-frame lever on the root-frame Jacobian (the TCP taken
+    #: ~10 cm above the hand while it points down). The datasets collected before 171353b used
+    #: "isaaclab"; with "tcp" the scripted expert's wrist runs into its q5/q6 limits (26% vs 75% success)
+    ik_jacobian: str = "tcp"
     #: the FB action terms' gripper hysteresis: the command flips only when the action's sign
     #: changes and its size exceeds this (ResiP / FurnitureRLSimEnv's grasp_margin, 0.019);
     #: 0 = flip on the sign, Isaac Lab's binary term as is
@@ -405,6 +411,7 @@ class AssemblyEnvCfg(ManagerBasedRLEnvCfg):
         self.apply_assets()
         self.apply_friction()
         self.apply_gripper()
+        self.apply_ik()
         self.apply_observations()
         self.apply_masses()
         mdp.randomness(self.furniture)  # an unknown furniture.randomness fails here
@@ -458,6 +465,21 @@ class AssemblyEnvCfg(ManagerBasedRLEnvCfg):
                 term.params["offset"] = EE_OFFSET
             else:
                 term.params.pop("offset", None)
+
+    def apply_ik(self) -> None:
+        """Push ``furniture.ik_jacobian`` into the differential-IK arm term(s) (call again after changing
+        it). A cfg without one (the OSC terms) is left as it is."""
+        from isaaclab.envs.mdp.actions.task_space_actions import DifferentialInverseKinematicsAction
+
+        from .mdp.tcp_ik import TcpDifferentialIKAction
+
+        mode = self.furniture.ik_jacobian
+        if mode not in ("tcp", "isaaclab"):
+            raise ValueError(f"furniture.ik_jacobian must be 'tcp' or 'isaaclab', got {mode!r}")
+        for group in (self.actions, getattr(self.actions, "fb", None)):
+            term = getattr(group, "arm", None) if group is not None else None
+            if isinstance(term, DifferentialInverseKinematicsActionCfg):
+                term.class_type = TcpDifferentialIKAction if mode == "tcp" else DifferentialInverseKinematicsAction
 
     def apply_gripper(self) -> None:
         """Push ``furniture.gripper_*`` into the finger actuator, the gripper action term(s) and the
@@ -744,6 +766,7 @@ def apply_resip(cfg) -> None:
         fb.arm = dik_arm_cfg(absolute=fb.class_type.__name__ == "FurnitureBenchAbsAction")
     else:
         cfg.actions.arm = dik_arm_cfg(absolute=False)
+    cfg.apply_ik()
 
 
 @configclass

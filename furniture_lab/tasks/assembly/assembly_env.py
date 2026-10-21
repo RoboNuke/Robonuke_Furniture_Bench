@@ -44,6 +44,7 @@ class AssemblyEnv(ManagerBasedRLEnv):
         cfg.apply_assets()
         cfg.apply_friction()
         cfg.apply_gripper()
+        cfg.apply_ik()
         cfg.apply_observations()
         cfg.apply_masses()
         # an unknown furniture.randomness fails here, not at the first reset; every level but
