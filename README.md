@@ -252,6 +252,23 @@ python scripts/collect_scripted.py --sim resip --out_dir ~/Robonuke_Furniture_Be
 `--servo_gain` defaults to 1 there (the joint PD closes a command in a step; the OSC's 20 % per
 step is why the port's default is 5).
 
+Fields that bring the port to FurnitureSim / ResiP's sim, set from a project config as
+`task.cfg.furniture.*`. All of them default to FurnitureSim's / ResiP's values since 2026-10-20
+(datasets recorded before used the port's own: obstacle friction 0.10, no robot material, the hand's
+centre-of-mass velocity, `randomness: port`, the real masses, the position gripper, UWLab's meshes):
+
+* **The part meshes.** `furniture.part_assets` (default `furniturebench`) picks the part USDs. `uwlab`: the
+  repo's UWLab files, each part split into convex hulls (the top's plate and walls, the leg's body)
+  and SDF meshes at PhysX's default resolution (256) on the hole blocks and the bolt.
+  `furniturebench`: FurnitureBench's own OBJs (ResiP's fork) in `assets/FurnitureBench`, one
+  collision mesh per part as ResiP's URDFs give Isaac Gym -- an SDF at 512 on the top and leg 4,
+  convex hulls on legs 1-3 -- in the OBJ mesh frame (`apply_assets` sets `mesh_frame` and the
+  nominal poses). Same bolt and hole geometry to 0.01 mm. Written by `tools/convert_assets.py`
+  (one part per run; it also finishes Isaac Lab 2.3's SDF schema, which leaves out
+  `approximation = sdf`). Under this PhysX the whole-part SDF top slides about twice as far on the
+  table after a kick as the UWLab top does. `furniturebench_top1024`: the same with the top's SDF at
+  1024 (0.16 mm cells; 512 gives 0.32 mm, about the thread's 0.38 mm crest-to-root clearance).
+
 ### Hybrid force/position control on joint torques
 
 `Isaac-Furniture-OneLeg-FBAbs-ResiP-Hybrid-v0` (`OneLegFBAbsResiPHybridEnvCfg`) is ResiP's sim and

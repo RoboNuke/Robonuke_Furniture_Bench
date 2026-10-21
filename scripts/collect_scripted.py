@@ -109,6 +109,11 @@ parser.add_argument("--part_friction", type=float, default=None, help="parts' fr
 parser.add_argument("--grip_stiffness", type=float, default=None, help="finger drive N/m (default 600; Isaac Lab's Franka 2000)")
 parser.add_argument("--grip_force", type=float, default=None, help="finger effort limit N (default 30; Isaac Lab's Franka 200)")
 parser.add_argument("--table_friction", type=float, default=None, help="table/obstacle friction (FurnitureSim: 0.10)")
+parser.add_argument(
+    "--part_assets", default=None,
+    help="the part USDs (furniture.part_assets; default: the task's, furniturebench): furniturebench | "
+    "furniturebench_top1024 (the top's SDF at 1024) | uwlab",
+)
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 if args.record:
@@ -329,6 +334,9 @@ def main() -> None:
             raise SystemExit("--render_every must be >= 1")
         cfg.sim.render_interval = args.render_every
     cfg.furniture.log_resets = True
+    if args.part_assets is not None:
+        cfg.furniture.part_assets = args.part_assets
+    cfg.apply_assets()
     if args.part_friction is not None:
         cfg.furniture.part_friction = args.part_friction
     if args.table_friction is not None:

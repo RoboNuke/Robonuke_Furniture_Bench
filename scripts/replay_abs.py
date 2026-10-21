@@ -71,6 +71,8 @@ parser.add_argument("--grip_damping", type=float, default=None, help="finger dri
 parser.add_argument("--grip_force", type=float, default=None, help="finger effort cap N (ResiP task: 13)")
 parser.add_argument("--grip_speed", type=float, default=None, help="finger speed cap m/s (ResiP task: 0.2); 0 = the asset default")
 parser.add_argument("--no_rot_rescale", action="store_true", help="zarr: keep ResiP's shrunk rotation deltas as stored")
+# the task's furniture fields (defaults: the task's own)
+parser.add_argument("--part_assets", default=None, help="furniture.part_assets (furniturebench | uwlab)")
 parser.add_argument("--print_every", type=int, default=50, help="per-step EE error lines (0: off)")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
@@ -111,6 +113,8 @@ for _name, _w in FBABS_OBS_LAYOUT:
 #: the task is the ResiP one (63 wide): its parts are in the robot-base frame and the front
 #: obstacle's x, y follow them; set in main() from the task's cfg, before the episodes are read
 OBSTACLE_OBS = False
+#: the env's part USDs' mesh frame (``furniture.mesh_frame``, from ``part_assets``); set in main()
+MESH = None
 
 
 # ------------------------------------------------------------------------------ the episodes
@@ -123,7 +127,7 @@ def pkl_episodes(root: Path):
     if not paths:
         raise SystemExit(f"no demo .pkl under {root}")
     for path in paths[: args.max_demos] if args.max_demos else paths:
-        demo = load_demo(path)
+        demo = load_demo(path, frame=MESH)  # the part poses in the env's USD mesh frame
         with open(path, "rb") as f:
             data = pickle.load(f)
         # what the env was given when the demo was recorded (a DART demo's perturbed commands)
@@ -289,7 +293,7 @@ def set_state_ik(env, ee: np.ndarray, width: float, parts: np.ndarray, grip: flo
     robot.write_joint_state_to_sim(q, torch.zeros_like(q))
     if obstacle_tag is not None:
         _write_obstacles(env, obstacle_tag)
-    pos, quat = _parts_to_world(parts, MESH_FRAMES[mesh_frame()])
+    pos, quat = _parts_to_world(parts, MESH_FRAMES[env.cfg.furniture.mesh_frame])  # the env's USDs' frame
     _write_parts(env, pos, quat, PART_NAMES[: pos.shape[0]])
     _settle_physics(env)
     o = obs(env)
@@ -473,9 +477,14 @@ def replay(env, name, states, acts, start, recorded_success, skip=None) -> dict:
 
 
 def main() -> None:
-    global OBSTACLE_OBS, _s
+    global OBSTACLE_OBS, MESH, _s
     episodes = zarr_episodes(Path(args.zarr).expanduser()) if args.zarr else pkl_episodes(Path(args.demos).expanduser())
     cfg = load_cfg_from_registry(args.task, "env_cfg_entry_point")
+    f = cfg.furniture
+    if args.part_assets is not None:
+        f.part_assets = args.part_assets
+    cfg.apply_assets()
+    MESH = f.mesh_frame
     layout = fbabs_obs_layout(cfg)
     OBSTACLE_OBS = any(name == "obstacle_xy" for name, _ in layout)
     _s = sum(w for _, w in layout)

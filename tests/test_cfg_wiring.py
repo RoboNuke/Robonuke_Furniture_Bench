@@ -32,14 +32,14 @@ def test_scene_holds_every_part_at_its_reset_pose(cfg_module):
     cfg = cfg_module.OneLegEnvCfg()
     for part in st.PARTS:
         entry = getattr(cfg.scene, part.name)
-        pos, quat = st.reset_pose_world(part)
+        pos, quat = st.reset_pose_world(part, cfg.furniture.mesh_frame)  # the default assets' frame
         assert entry.prim_path == "{ENV_REGEX_NS}/" + part.name
         assert tuple(entry.init_state.pos) == pytest.approx(pos)
         assert tuple(entry.init_state.rot) == pytest.approx(quat)
         assert os.path.isfile(entry.spawn.usd_path)  # the repo's own assets/
     assert cfg.furniture.part_names == st.PART_NAMES
     assert cfg.furniture.task == "one_leg"
-    assert cfg.furniture.mesh_frame == "uwlab"
+    assert cfg.furniture.mesh_frame == "obj"  # part_assets furniturebench: FurnitureBench's OBJ frame
     assert cfg_module.SquareTableEnvCfg().furniture.task == "square_table"
 
 
@@ -159,6 +159,33 @@ def test_friction_knobs_reach_the_events_and_the_table(cfg_module):
         assert term.params["dynamic_friction_range"] == (0.5, 0.5)
     assert cfg.sim.physics_material.static_friction == 0.4
     assert cfg.sim.physics_material.dynamic_friction == 0.4
+
+
+def test_part_assets_switch_the_usds_the_mesh_frame_and_the_nominal_poses(cfg_module):
+    from furniture_lab.tasks.furniture import catalog
+
+    cfg = cfg_module.OneLegFBAbsResiPEnvCfg()
+    assert cfg.furniture.part_assets == "furniturebench" and cfg.furniture.mesh_frame == "obj"  # the default
+    for part in st.PARTS:
+        entry = getattr(cfg.scene, part.name)
+        assert entry.spawn.usd_path.endswith(f"assets/FurnitureBench/{part.name}.usd") and os.path.isfile(entry.spawn.usd_path)
+        pos, quat = st.reset_pose_world(part, "obj")
+        assert tuple(entry.init_state.pos) == pytest.approx(pos) and tuple(entry.init_state.rot) == pytest.approx(quat)
+    cfg.furniture.part_assets = "furniturebench_top1024"  # the top's SDF at 1024, the rest the same
+    cfg.apply_assets()
+    assert cfg.furniture.mesh_frame == "obj" and cfg.scene.square_table_top.spawn.usd_path.endswith("square_table_top_sdf1024.usd")
+    assert cfg.scene.square_table_leg4.spawn.usd_path.endswith("assets/FurnitureBench/square_table_leg4.usd")
+    assert os.path.isfile(cfg.scene.square_table_top.spawn.usd_path)
+    cfg.furniture.part_assets = "uwlab"  # the earlier files, frame and poses
+    cfg.apply_assets()
+    assert cfg.furniture.mesh_frame == "uwlab" and "SquareLeg" in cfg.scene.square_table_leg4.spawn.usd_path
+    for part in st.PARTS:
+        entry = getattr(cfg.scene, part.name)
+        assert entry.spawn.usd_path == catalog.usd_path(part.name, "uwlab")
+        assert tuple(entry.init_state.rot) == pytest.approx(st.reset_pose_world(part, "uwlab")[1])
+    cfg.furniture.part_assets = "obj"
+    with pytest.raises(ValueError, match="part_assets"):
+        cfg.apply_assets()
 
 
 def test_gripper_knobs_reach_the_finger_actuator(cfg_module):

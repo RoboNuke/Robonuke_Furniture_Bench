@@ -144,6 +144,17 @@ class FurnitureCfg:
     #: max finger joint speed (m/s per finger; PhysX max joint velocity), None = the asset's.
     #: (ResiP's effort-mode fingers -- 13 N against DOF friction 15 -- close at ~0.057 m/s)
     gripper_velocity_limit: Optional[float] = None
+    #: the part USDs (``catalog.ASSET_SETS``). ``furniturebench`` (default since 2026-10-20):
+    #: FurnitureBench's own OBJs converted as ResiP's URDFs give them to Isaac Gym
+    #: (``assets/FurnitureBench``, ``tools/convert_assets.py``): one collision mesh per part, an SDF at
+    #: 512 on the top and leg 4, convex hulls on legs 1-3 (with ResiP's checkpoint: insertion failures
+    #: 40% -> 4%, the released leg's lean 10 -> 4.5 deg). ``uwlab`` (every dataset before): the repo's
+    #: UWLab files -- each part split into convex hulls (the top's plate and walls, the leg's body)
+    #: and SDF meshes at PhysX's default resolution on the hole blocks and the bolt.
+    #: ``furniturebench_top1024``: ``furniturebench`` with the top's SDF at 1024 (0.16 mm cells; 512
+    #: gives 0.32 mm, about the thread's 0.38 mm crest-to-root clearance). ``apply_assets`` sets the
+    #: USDs, ``mesh_frame`` and the nominal poses
+    part_assets: str = "furniturebench"
     #: the FB action terms' gripper hysteresis: the command flips only when the action's sign
     #: changes and its size exceeds this (ResiP / FurnitureRLSimEnv's grasp_margin, 0.019);
     #: 0 = flip on the sign, Isaac Lab's binary term as is
@@ -324,8 +335,31 @@ class AssemblyEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.lookat = (0.4, 0.0, 0.0)
         if self.furniture.task is MISSING:
             raise ValueError("furniture.task is unset: use OneLegEnvCfg or SquareTableEnvCfg")
+        self.apply_assets()
         self.apply_friction()
         self.apply_gripper()
+
+    def apply_assets(self) -> None:
+        """Push ``furniture.part_assets`` into the parts' USDs, ``furniture.mesh_frame`` and the
+        parts' nominal (default) poses, which are expressed in the USDs' mesh frame (call again after
+        changing it)."""
+        from ..furniture import catalog
+        from ..furniture.square_table import reset_pose_world
+
+        assets = self.furniture.part_assets
+        if assets not in catalog.ASSET_SETS:
+            raise ValueError(f"furniture.part_assets must be one of {sorted(catalog.ASSET_SETS)}, got {assets!r}")
+        specs = {p.name: p for p in PARTS}
+        frames_used = {catalog.mesh_frame_of(name, assets) for name in self.furniture.part_names}
+        if len(frames_used) != 1:
+            raise ValueError(f"furniture.part_assets {assets!r}: the parts use different mesh frames {sorted(frames_used)}")
+        frame = frames_used.pop()
+        self.furniture.mesh_frame = frame
+        for name in self.furniture.part_names:
+            part = getattr(self.scene, name)
+            part.spawn.usd_path = catalog.usd_path(name, assets)
+            pos, quat = reset_pose_world(specs[name], frame)
+            part.init_state.pos, part.init_state.rot = pos, quat
 
     def apply_gripper(self) -> None:
         """Push ``furniture.gripper_*`` into the finger actuator (call again after changing them)."""
