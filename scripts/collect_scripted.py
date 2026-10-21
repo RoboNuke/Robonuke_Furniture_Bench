@@ -110,6 +110,13 @@ parser.add_argument("--grip_stiffness", type=float, default=None, help="finger d
 parser.add_argument("--grip_force", type=float, default=None, help="finger effort limit N (default 30; Isaac Lab's Franka 200)")
 parser.add_argument("--table_friction", type=float, default=None, help="table/obstacle friction (FurnitureSim: 0.10)")
 parser.add_argument(
+    "--randomness", choices=["port", "low", "med", "high", "kick_low", "kick_med", "kick_high"], default=None,
+    help="the reset distribution (furniture.randomness; default: the task's, FurnitureBench's low): port = this port's "
+    "earlier uniform +-1.5 cm / +-15 deg per part; low / med / high = FurnitureBench's levels (FurnitureSimEnv: tag-frame "
+    "offsets and yaws, collision-free, inside the position limits; high = a recorded layout); kick_low / kick_med / "
+    "kick_high = ResiP's FurnitureRLSimEnv levels (a kick per part, arm-joint noise, the level's obstacle offset)",
+)
+parser.add_argument(
     "--part_assets", default=None,
     help="the part USDs (furniture.part_assets; default: the task's, furniturebench): furniturebench | "
     "furniturebench_top1024 (the top's SDF at 1024) | uwlab",
@@ -334,6 +341,8 @@ def main() -> None:
             raise SystemExit("--render_every must be >= 1")
         cfg.sim.render_interval = args.render_every
     cfg.furniture.log_resets = True
+    if args.randomness is not None:
+        cfg.furniture.randomness = args.randomness
     if args.part_assets is not None:
         cfg.furniture.part_assets = args.part_assets
     cfg.apply_assets()

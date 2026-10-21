@@ -24,6 +24,7 @@ import torch
 
 from isaaclab.envs import ManagerBasedRLEnv
 
+from .mdp.events import randomness
 from .mdp.state import tracker
 from .wrench import JointTorqueWrench
 
@@ -34,12 +35,24 @@ class AssemblyEnv(ManagerBasedRLEnv):
 
     def __init__(self, cfg, render_mode: str | None = None, **kwargs):
         self._episode_success = None
+        #: ResiP's reset kick on the parts (furniture.randomness kick_*), made by its
+        #: reset event (mdp.events.resip_reset); None until then
+        self.part_kick = None
         # furniture.*_friction / gripper_* / ik_jacobian / ee_vel_point / part_masses are plain fields a config file can
         # override after the cfg's __post_init__ ran; push them into the event terms, the
         # actuator and the observation terms here, where the scene has not been built yet
         cfg.apply_assets()
         cfg.apply_friction()
         cfg.apply_gripper()
+        # an unknown furniture.randomness fails here, not at the first reset; every level but
+        # port runs through the reset_parts term, so a cfg without it would silently skip it
+        if randomness(cfg.furniture) != "port":
+            term = getattr(cfg.events, "reset_parts", None)
+            if term is None or getattr(term.func, "__name__", "") != "randomize_parts_pose":
+                raise ValueError(
+                    f"furniture.randomness={cfg.furniture.randomness!r} needs events.reset_parts = "
+                    f"mdp.randomize_parts_pose (it runs that level's reset); got {term!r}"
+                )
         super().__init__(cfg, render_mode, **kwargs)
         self._episode_success = torch.zeros(self.num_envs, device=self.device)
         self.wrench = JointTorqueWrench(self, cfg.furniture)
@@ -47,6 +60,8 @@ class AssemblyEnv(ManagerBasedRLEnv):
 
         def apply_action_then_estimate():
             apply_action()
+            if self.part_kick is not None:
+                self.part_kick.apply()  # before the scene writes the wrenches and the sim steps
             self.wrench.update()
 
         self.action_manager.apply_action = apply_action_then_estimate

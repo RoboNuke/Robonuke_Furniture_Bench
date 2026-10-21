@@ -28,8 +28,11 @@ What is upstream and what is this port's choice:
 * **Reward / termination**: upstream's sparse assembled reward and success; ``time_out``
   at ``episode_length_s`` (upstream's 3000-step cap is 150 s; 30 s is this port's default)
   and a ``part_out_of_limits`` termination (FurnitureBench's real-robot rule; FurnitureSim lacks it).
-* **Reset**: ``low`` randomness by default (+-1.5 cm, +-15 deg); ``medium`` is a param change
-  (``randomize_parts_pose``: 0.05, 45). ``high`` (a table of fixed poses) is not ported.
+* **Reset**: ``furniture.randomness`` picks the level, by default FurnitureBench's ``low``
+  exactly (+-1.5 cm, +-15 deg in the tag frame, collision-free, inside the parts' position limits);
+  ``med`` (+-5 cm, +-45 deg) and ``high`` (recorded layouts) too, ResiP's FurnitureRLSimEnv reset as
+  ``kick_low`` / ``kick_med`` / ``kick_high``, the port's earlier uniform layout as ``port``
+  (``mdp/events.py``). Part masses: ``furniture.part_masses``, by default what FurnitureSim simulates.
 """
 
 from __future__ import annotations
@@ -118,8 +121,24 @@ class FurnitureCfg:
     #: ``success_clearance`` (m) from the inserted part.
     #: m: at every reset the three obstacles move together by one uniform (x, y) offset in
     #: [-r, r] (ResiP's FurnitureRLSimEnv, low randomness: 0.02; ``apply_resip`` sets it).
-    #: 0 keeps them at ``frames``' fixed poses
+    #: 0 keeps them at ``frames``' fixed poses. Not used when ``randomness`` is a ResiP level
     obstacle_offset: float = 0.0
+    #: the reset distribution, read at every reset (``mdp/events.py``). ``port`` (every dataset
+    #: before 2026-10-20): every part uniform +-1.5 cm / +-15 deg yaw, redrawn while footprints
+    #: overlap (no margin, no position limits; ``events.reset_parts.params``), the obstacles by
+    #: ``obstacle_offset``, the arm at its reset joints. ``low`` (default) / ``med`` / ``high``:
+    #: FurnitureBench's own levels exactly (FurnitureSimEnv) -- each part's tag-frame x, y
+    #: +-1.5 / +-5 cm and yaw +-15 / +-45 deg, redrawn until collision-free (1 cm margin) and inside
+    #: the parts' position limits; ``high`` one of three recorded layouts (``high_layout``); the
+    #: arm at its reset joints, the obstacles fixed. ``kick_low`` / ``kick_med`` / ``kick_high``:
+    #: ResiP's FurnitureRLSimEnv levels exactly (``mdp.events.RESIP_RANDOMNESS``) -- the parts at
+    #: their nominal poses, each kicked once by a random xy force and z torque; every arm joint
+    #: +-5 / 10 / 13 deg; the obstacles +-2 / 4 / 6 cm. ``obstacle_offset`` is used by ``port`` only
+    randomness: str = "low"
+    #: ``randomness: high``: which of FurnitureBench's three recorded layouts (0, 1, 2; their
+    #: FurnitureSimEnv's default, ``--high-random-idx``, is 0), or -1: one at random per env at
+    #: every reset
+    high_layout: int = 0
     success_mode: str = "soft"
     success_hold_steps: int = 10
     success_release_width: float = 0.05
@@ -338,6 +357,9 @@ class AssemblyEnvCfg(ManagerBasedRLEnvCfg):
         self.apply_assets()
         self.apply_friction()
         self.apply_gripper()
+        mdp.randomness(self.furniture)  # an unknown furniture.randomness fails here
+        if self.furniture.high_layout not in (-1, 0, 1, 2):
+            raise ValueError(f"furniture.high_layout must be 0, 1, 2 or -1 (random), got {self.furniture.high_layout}")
 
     def apply_assets(self) -> None:
         """Push ``furniture.part_assets`` into the parts' USDs, ``furniture.mesh_frame`` and the

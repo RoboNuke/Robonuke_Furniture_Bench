@@ -257,6 +257,30 @@ Fields that bring the port to FurnitureSim / ResiP's sim, set from a project con
 (datasets recorded before used the port's own: obstacle friction 0.10, no robot material, the hand's
 centre-of-mass velocity, `randomness: port`, the real masses, the position gripper, UWLab's meshes):
 
+* **The reset distribution.** `furniture.randomness` (default `low`) picks it, read at every reset
+  (`mdp/events.py`).
+  * `low` / `med` / `high`: FurnitureBench's own levels (`FurnitureSimEnv.reset_env`), exactly.
+    `low` / `med` (`Furniture.randomize_init_pose`): each part's tag-frame x, y offset U(±1.5 / ±5 cm)
+    and its yaw U(±15 / ±45°) about the tag z; every part redrawn together until no two collide
+    (their yawed `reset_x_len` x `reset_y_len` boxes' axis-aligned bounds within 1 cm) and every part
+    lies inside the parts' position limits (tag x in [-0.21, 0.21], y in [0.07, 0.37]: the legs sit
+    on y = 0.07, so a leg only moves away from the robot), up to 300000 draws (batched here).
+    `high`: one of three recorded layouts (`high_rand_reset_*`), `furniture.high_layout` 0 / 1 / 2
+    (FurnitureSim's default 0) or -1 (one at random per reset). The arm at its reset joints, the
+    obstacles at their fixed poses.
+  * `kick_low` / `kick_med` / `kick_high`: ResiP's FurnitureRLSimEnv levels
+    (`mdp.events.RESIP_RANDOMNESS`), the reset its BC / RL numbers, released checkpoints and demos
+    come from. The parts stay at their nominal poses and each gets one kick, a world-frame xy force of
+    random direction and magnitude U(0, 0.2 / 0.5 / 0.75 N) and a z torque U(±0.007 / 0.01 / 0.015
+    N m), both times the part's multiplier (top 25 / 70, legs 1), held 1/60 s (their one
+    `simulate()`, which applies a force for both substeps; here 2 physics steps); every arm joint
+    gets U(±5 / 10 / 13°); the obstacles move together by U(±2 / 4 / 6 cm) in x and y. Their kick acts
+    before their first observation; here in the first control step, so the first observation shows
+    the parts at rest at their nominal poses. With `part_masses` at their sim's values the settled
+    starts match ResiP's demos (target leg 2.7 mm std / 20 mm range there 2.8 / 18.8).
+  * `port`: this port's earlier reset -- every part uniform ±1.5 cm / ±15° yaw, redrawn while two
+    footprints overlap (no margin, no limits, 20 tries), the obstacles by `furniture.obstacle_offset`
+    (used by `port` only), the arm at its reset joints.
 * **The part meshes.** `furniture.part_assets` (default `furniturebench`) picks the part USDs. `uwlab`: the
   repo's UWLab files, each part split into convex hulls (the top's plate and walls, the leg's body)
   and SDF meshes at PhysX's default resolution (256) on the hole blocks and the bolt.
