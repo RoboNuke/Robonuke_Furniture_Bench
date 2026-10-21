@@ -49,6 +49,29 @@ FORCES = (
     "screw_fz_last10_N", "screw_fxy_last10_N", "fxy_peak_after_release", "fxy_peak_before_end",
 )
 
+#: the per-stage tables' column headers
+SHORT = {
+    "success": "success", "aborted": "aborted",
+    "top_push: never released": "push:norel", "top_push: top not in the corner": "push:corner",
+    "leg_grasp: never grasped": "grasp:none", "leg_grasp: not lifted": "grasp:nolift",
+    "leg_carry: dropped": "carry:drop",
+    "insertion: never released": "ins:norel", "insertion: not in the hole": "ins:nohole",
+    "screwing: top moved": "scr:topmove", "screwing: leg fell out": "scr:fellout",
+    "screwing: stalled in the hole": "scr:stalled",
+}
+
+
+def stage_table(keys, rows, stages) -> None:
+    """Median of each key per stage; a stage none of the keys reached is left out."""
+    cells = {k: {st: [r[k] for _, r in rows if r["stage"] == st and k in r] for st in stages} for k in keys}
+    cols = [st for st in stages if any(cells[k][st] for k in keys)]
+    text = {k: [f"{np.median(cells[k][st]):.1f}" if cells[k][st] else "-" for st in cols] for k in keys}
+    label = max(len(k) for k in keys)
+    width = [max([len(SHORT[st])] + [len(text[k][j]) for k in keys]) for j, st in enumerate(cols)]
+    print("  " + " " * label + "".join(f"  {SHORT[st]:>{w}s}" for st, w in zip(cols, width)))
+    for k in keys:
+        print(f"  {k:{label}s}" + "".join(f"  {c:>{w}s}" for c, w in zip(text[k], width)))
+
 
 def main() -> int:
     root = Path(args.dir).expanduser()
@@ -90,37 +113,25 @@ def main() -> int:
             print(f"  {n:3d}  {stage}")
     if ok:
         print("\nsuccesses, median (check the thresholds against these):")
-        for k in METRICS:
+        shown = [k for k in METRICS if any(k in r for r in ok)]
+        label = max(len(k) for k in shown)
+        for k in shown:
             vals = [r[k] for r in ok if k in r]
-            if vals:
-                print(f"  {k:18s} {np.median(vals):7.1f}  (max {np.max(vals):.1f})")
+            print(f"  {k:{label}s} {np.median(vals):7.1f}  (max {np.max(vals):.1f})")
+    stages = [st for st in STAGES if counts.get(st)]
     tilt = [k for k in ("insert_tilt_deg", "grasp1_tilt_deg", "grasp1_xz_mm", "held_tilt_p95_deg", "held_tilt_last10_deg")
             if any(k in r for _, r in rows)]
     if tilt:
-        stages = [st for st in STAGES if counts.get(st)]
         print("\nleg lean, median per stage (in the top's frame; screwing: while the fingers hold it):")
-        print("  " + " " * 22 + "".join(f"{st.split(': ')[-1][:16]:>18s}" for st in stages))
-        for k in tilt:
-            cells = []
-            for st in stages:
-                vals = [r[k] for _, r in rows if r["stage"] == st and k in r]
-                cells.append(f"{np.median(vals):18.1f}" if vals else f"{'-':>18s}")
-            print(f"  {k:22s}" + "".join(cells))
+        stage_table(tilt, rows, stages)
     have = [k for k in FORCES if any(k in r for _, r in rows)]
     if have:
-        stages = [st for st in STAGES if counts.get(st)]
         print("\nforces, median per stage (+z: the parts pushing back up on the hand):")
-        print("  " + " " * 18 + "".join(f"{st.split(': ')[-1][:16]:>18s}" for st in stages))
         held = [r["fxy_peak_while_held"] for _, r in rows if "fxy_peak_while_held" in r]
         if held:
             print(f"  (the screwing fxy peak came with the fingers open in {held.count(False)}/{len(held)} attempts: the "
                   "arm's own effort, not contact -- read the _held rows)")
-        for k in have:
-            cells = []
-            for st in stages:
-                vals = [r[k] for _, r in rows if r["stage"] == st and k in r]
-                cells.append(f"{np.median(vals):18.1f}" if vals else f"{'-':>18s}")
-            print(f"  {k:18s}" + "".join(cells))
+        stage_table(have, rows, stages)
     else:
         print("\n(no ee_wrench in these files: collect / replay again with the current scripts for the forces)")
     return 0
