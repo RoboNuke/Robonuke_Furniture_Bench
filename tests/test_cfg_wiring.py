@@ -89,8 +89,9 @@ def test_reset_events_run_in_order(cfg_module):
     mass = [v for v in startup if "mass_distribution_params" in v.params]
     assert sorted(v.params["asset_cfg"]._args[0] for v in friction) == sorted(st.PART_NAMES)
     assert all(v.params["static_friction_range"] == (st.PART_FRICTION,) * 2 for v in friction)
-    assert {v.params["asset_cfg"]._args[0]: v.params["mass_distribution_params"][0] for v in mass} == {
-        p.name: p.mass for p in st.PARTS
+    # furniture.part_masses: what FurnitureSim simulates (st.ISAAC_GYM_MASS), not PartSpec.mass
+    assert {v.params["asset_cfg"]._args[0]: v.params["mass_distribution_params"] for v in mass} == {
+        p.name: (st.ISAAC_GYM_MASS[p.name],) * 2 for p in st.PARTS
     }
     assert all(v.params["operation"] == "abs" for v in mass)
 
@@ -159,6 +160,26 @@ def test_friction_knobs_reach_the_events_and_the_table(cfg_module):
         assert term.params["dynamic_friction_range"] == (0.5, 0.5)
     assert cfg.sim.physics_material.static_friction == 0.4
     assert cfg.sim.physics_material.dynamic_friction == 0.4
+
+
+def test_reset_and_masses_default_to_furniturebench(cfg_module):
+    """Every cfg, apply_resip included: ``furniture.randomness`` FurnitureBench's ``low`` (run by the
+    reset_parts term) and ``part_masses`` what FurnitureSim simulates; bad values fail at construction."""
+    for name in ("OneLegEnvCfg", "OneLegFBAbsEnvCfg", "OneLegFBAbsResiPEnvCfg", "OneLegFBAbsResiPHybridEnvCfg"):
+        cfg = getattr(cfg_module, name)()
+        assert cfg.furniture.randomness == "low" and cfg.furniture.high_layout == 0
+        assert cfg.furniture.part_masses == tuple(st.ISAAC_GYM_MASS[n] for n in st.PART_NAMES)
+        assert cfg.events.reset_parts.func.__name__ == "randomize_parts_pose"
+    assert st.ISAAC_GYM_MASS == {"square_table_top": 0.4115, "square_table_leg1": 0.0264, "square_table_leg2": 0.0265,
+                                 "square_table_leg3": 0.0264, "square_table_leg4": 0.0291}
+    cfg = cfg_module.OneLegEnvCfg()
+    cfg.furniture.part_masses = (0.151, 0.0231, 0.0231, 0.0231, 0.0231)
+    cfg.apply_masses()
+    assert cfg.events.top_mass.params["mass_distribution_params"] == (0.151, 0.151)
+    for bad, match in (({"randomness": "medium"}, "furniture.randomness"), ({"high_layout": 3}, "high_layout"),
+                       ({"part_masses": (0.4, 0.02)}, "part_masses")):
+        with pytest.raises(ValueError, match=match):
+            cfg_module.OneLegEnvCfg(furniture=cfg_module.FurnitureCfg(task="one_leg", **bad))
 
 
 def test_part_assets_switch_the_usds_the_mesh_frame_and_the_nominal_poses(cfg_module):

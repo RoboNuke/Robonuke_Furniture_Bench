@@ -42,6 +42,7 @@ __all__ = [
     "mesh_frame",
     "reset_pose_world",
     "tag_pose_world",
+    "ISAAC_GYM_MASS",
     "RANDOMIZE_INIT_POSE",
     "RANDOMIZE_MAX_TRIAL",
     "PARTS_POS_LIM",
@@ -105,6 +106,20 @@ SQUARE_TABLE_PAIRS: List[Tuple[int, int]] = [(0, 4), (0, 3), (0, 1), (0, 2)]
 #: (about 20 deg) with the identity's. Use :func:`pos_threshold_in` for another mesh frame.
 ASSEMBLED_POS_THRESHOLD = (0.010, 0.005, 0.010)
 ORI_BOUND = 0.94
+
+#: the masses FurnitureSim actually simulates (kg): Isaac Gym gives a URDF link with no
+#: ``<inertial>`` density x the volume of its collision mesh's convex hull, so the top weighs
+#: 0.411511 kg and the legs 0.026361 / 0.026522 / 0.026360 / 0.029137 (read back from their sim
+#: with their URDFs and asset options), not the ``sim_config`` comments' 151 g / 23.1 g
+#: (``PartSpec.mass``). Rounded to 0.1 g: the values ResiP's checkpoint scored 16% with in the port.
+#: ``furniture.part_masses`` defaults to these.
+ISAAC_GYM_MASS: Dict[str, float] = {
+    "square_table_top": 0.4115,
+    "square_table_leg1": 0.0264,
+    "square_table_leg2": 0.0265,
+    "square_table_leg3": 0.0264,
+    "square_table_leg4": 0.0291,
+}
 
 #: ``sim_config["parts"]["friction"]`` / ``sim_config["table"]["friction"]``
 PART_FRICTION = 0.15

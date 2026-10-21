@@ -292,6 +292,12 @@ centre-of-mass velocity, `randomness: port`, the real masses, the position gripp
   `approximation = sdf`). Under this PhysX the whole-part SDF top slides about twice as far on the
   table after a kick as the UWLab top does. `furniturebench_top1024`: the same with the top's SDF at
   1024 (0.16 mm cells; 512 gives 0.32 mm, about the thread's 0.38 mm crest-to-root clearance).
+* **The part masses.** `furniture.part_masses` (kg, in `part_names` order) defaults to what
+  FurnitureSim simulates, `square_table.ISAAC_GYM_MASS`: top 0.4115, legs 0.0264 / 0.0265 / 0.0264 /
+  0.0291. Isaac Gym gives a URDF link without `<inertial>` density x its collision mesh's convex-hull
+  volume (read back from their sim), not the `sim_config` comments' 151 g / 23.1 g (`PartSpec.mass`,
+  the real parts). The inertia is the USD's, scaled to the mass (`recompute_inertia`); their parts
+  carry no damping, the port's the USD's.
 
 ### Hybrid force/position control on joint torques
 

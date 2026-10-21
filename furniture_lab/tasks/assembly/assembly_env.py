@@ -44,6 +44,7 @@ class AssemblyEnv(ManagerBasedRLEnv):
         cfg.apply_assets()
         cfg.apply_friction()
         cfg.apply_gripper()
+        cfg.apply_masses()
         # an unknown furniture.randomness fails here, not at the first reset; every level but
         # port runs through the reset_parts term, so a cfg without it would silently skip it
         if randomness(cfg.furniture) != "port":

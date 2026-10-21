@@ -60,6 +60,7 @@ from isaaclab.utils import configclass
 from ..furniture import assets, frames
 from ..furniture.square_table import (
     ASSEMBLED_POS_THRESHOLD,
+    ISAAC_GYM_MASS,
     ORI_BOUND,
     PART_FRICTION,
     PART_NAMES,
@@ -146,6 +147,11 @@ class FurnitureCfg:
     #: print a line on every reset (which envs, after how many steps, which termination
     #: fired). For watching; off for training, where it would print every step.
     log_resets: bool = False
+    #: each part's mass (kg), in ``part_names`` order, set by the startup mass events
+    #: (``apply_masses``). Default: what FurnitureSim simulates (``ISAAC_GYM_MASS``: top 411.5 g,
+    #: legs 26.4 / 26.5 / 26.4 / 29.1 g); ``PartSpec.mass`` holds the real parts' 151 g / 23.1 g
+    #: (every dataset before 2026-10-20)
+    part_masses: Tuple[float, ...] = tuple(ISAAC_GYM_MASS[name] for name in PART_NAMES)
     #: friction of the parts and of the table/obstacles (PhysX averages a pair, so part on
     #: table = (part + table) / 2). Defaults are FurnitureSim's: 0.15 and 0.10, i.e. 0.125
     #: between a part and the table -- icy; wood on laminate is 0.3-0.5. Applied in
@@ -357,6 +363,7 @@ class AssemblyEnvCfg(ManagerBasedRLEnvCfg):
         self.apply_assets()
         self.apply_friction()
         self.apply_gripper()
+        self.apply_masses()
         mdp.randomness(self.furniture)  # an unknown furniture.randomness fails here
         if self.furniture.high_layout not in (-1, 0, 1, 2):
             raise ValueError(f"furniture.high_layout must be 0, 1, 2 or -1 (random), got {self.furniture.high_layout}")
@@ -382,6 +389,17 @@ class AssemblyEnvCfg(ManagerBasedRLEnvCfg):
             part.spawn.usd_path = catalog.usd_path(name, assets)
             pos, quat = reset_pose_world(specs[name], frame)
             part.init_state.pos, part.init_state.rot = pos, quat
+
+    def apply_masses(self) -> None:
+        """Push ``furniture.part_masses`` into the startup mass events (call again after changing it)."""
+        names, masses = list(self.furniture.part_names), tuple(float(m) for m in self.furniture.part_masses)
+        if len(masses) != len(names) or min(masses) <= 0.0:
+            raise ValueError(f"furniture.part_masses needs one positive mass per part {names}, got {masses}")
+        for name, mass in zip(names, masses):
+            term = getattr(self.events, f"{name.replace('square_table_', '')}_mass", None)
+            if term is None:
+                raise ValueError(f"no startup mass event for {name} (events.{name.replace('square_table_', '')}_mass)")
+            term.params["mass_distribution_params"] = (mass, mass)
 
     def apply_gripper(self) -> None:
         """Push ``furniture.gripper_*`` into the finger actuator (call again after changing them)."""
