@@ -386,6 +386,10 @@ def main() -> None:
     if args.grip_force is not None:
         cfg.furniture.gripper_effort_limit = args.grip_force
     cfg.apply_gripper()
+    f = cfg.furniture
+    print(f"[collect] env: randomness {f.randomness}, parts {f.part_assets} ({f.mesh_frame}), masses {f.part_masses}, "
+          f"gripper {f.gripper_mode} ({f.gripper_effort} N, speed {f.gripper_velocity_limit}, self-collisions {f.robot_self_collisions}), ik_jacobian {f.ik_jacobian}, friction parts {f.part_friction} "
+          f"obstacles {f.obstacle_friction} robot {f.robot_friction}, ee_vel_point {f.ee_vel_point}, obstacle_offset {f.obstacle_offset}", flush=True)
     if args.record:
         cfg.scene.clone_in_fabric = False
         setattr(

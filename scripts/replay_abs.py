@@ -491,6 +491,8 @@ def main() -> None:
         if value is not None:
             setattr(f, name, value)
     cfg.apply_friction()
+    print(f"[replay] parts {f.part_assets} (mesh frame {f.mesh_frame}), masses {f.part_masses}, gripper {f.gripper_mode}, "
+          f"friction parts {f.part_friction} obstacles {f.obstacle_friction} robot {f.robot_friction}, randomness {f.randomness}", flush=True)
     layout = fbabs_obs_layout(cfg)
     OBSTACLE_OBS = any(name == "obstacle_xy" for name, _ in layout)
     _s = sum(w for _, w in layout)
