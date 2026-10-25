@@ -112,6 +112,16 @@ def test_terminations_and_reward(cfg_module):
     assert cfg.terminations.time_out.time_out is True
     assert cfg.terminations.success.func.__name__ == "all_assembled"
     assert cfg.rewards.assembled.weight == 1.0
+    # the per-step term is there but off: the reward manager skips a zero-weight term
+    assert cfg.rewards.step.func.__name__ == "each_step" and cfg.rewards.step.weight == 0.0
+
+
+def test_each_step_pays_one_to_every_env(cfg_module):
+    import torch
+
+    rewards = importlib.import_module("furniture_lab.tasks.assembly.mdp.rewards")
+    env = type("Env", (), {"num_envs": 3, "device": "cpu"})()
+    assert torch.equal(rewards.each_step(env), torch.ones(3))
 
 
 def test_registry_entry_points_resolve(cfg_module):

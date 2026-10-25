@@ -176,6 +176,68 @@ def ee_rot6d(
     return quat_to_rot6d(_ee_pose_b(env, asset_cfg, offset)[1])
 
 
+# ------------------------------------------------------- relative to the end-effector (-FBRel-)
+#: the front obstacle's z in the robot-base frame: it never changes (``obstacle_xy_b``), and the
+#: recordings' ``obstacles_robot`` hold 0.0 -- the EE-relative obstacle is its point (x, y, 0)
+OBSTACLE_Z_B = 0.0
+
+
+def to_ee_frame(p_ee: torch.Tensor, R_ee: torch.Tensor, pos: torch.Tensor, R: torch.Tensor | None = None):
+    """Base-frame positions ``pos`` ``(N, K, 3)`` (and rotations ``R`` ``(N, K, 3, 3)``) relative to
+    the EE pose ``p_ee`` ``(N, 3)``, ``R_ee`` ``(N, 3, 3)``: ``R_ee^T (pos - p_ee)`` and ``R_ee^T R``.
+    ``demos.ee_relative_states`` is its NumPy twin."""
+    R_t = R_ee.transpose(-1, -2).unsqueeze(1)  # (N, 1, 3, 3)
+    pos_e = (R_t @ (pos - p_ee.unsqueeze(1)).unsqueeze(-1)).squeeze(-1)
+    return pos_e if R is None else (pos_e, R_t @ R)
+
+
+def _ee_frame(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg, offset: tuple):
+    """The EE pose ``ee_pos`` / ``ee_rot6d`` report: ``(N, 3)`` position and ``(N, 3, 3)`` rotation, base frame."""
+    from .rot6d import quat_to_mat
+
+    pos, quat = _ee_pose_b(env, asset_cfg, offset)
+    return pos, quat_to_mat(quat)
+
+
+def ee_vel_ee(
+    env: "ManagerBasedRLEnv",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="panda_hand"),
+    offset: tuple | None = None,
+) -> torch.Tensor:
+    """``ee_vel`` (linear then angular, of the same point: ``furniture.ee_vel_point`` sets
+    ``offset`` as for ``ee_vel``) in the EE's own frame, ``(N, 6)``."""
+    _, R_ee = _ee_frame(env, asset_cfg, (0.0, 0.0, 0.1034))  # the offset is a translation: R is the hand's
+    vel = ee_vel(env, asset_cfg, offset).reshape(env.num_envs, 2, 3)
+    return (R_ee.transpose(-1, -2).unsqueeze(1) @ vel.unsqueeze(-1)).reshape(env.num_envs, 6)
+
+
+def parts_poses_ee_rot6d(
+    env: "ManagerBasedRLEnv",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="panda_hand"),
+    offset: tuple = (0.0, 0.0, 0.1034),
+) -> torch.Tensor:
+    """``parts_poses_b_rot6d``'s parts relative to the EE pose (``ee_pos`` / ``ee_rot6d``), ``(N, 9 P)``
+    of ``[pos 3, rot6d 6]``: each position ``R_ee^T (p - p_ee)``, each orientation ``R_ee^T R``."""
+    from .rot6d import mat_to_rot6d, rot6d_to_mat
+
+    p_ee, R_ee = _ee_frame(env, asset_cfg, offset)
+    parts = parts_poses_b_rot6d(env).reshape(env.num_envs, -1, 9)
+    pos, R = to_ee_frame(p_ee, R_ee, parts[..., :3], rot6d_to_mat(parts[..., 3:]))
+    return torch.cat([pos, mat_to_rot6d(R)], dim=-1).reshape(env.num_envs, -1)
+
+
+def obstacle_pos_ee(
+    env: "ManagerBasedRLEnv",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="panda_hand"),
+    offset: tuple = (0.0, 0.0, 0.1034),
+) -> torch.Tensor:
+    """The front obstacle's point ``(x, y, OBSTACLE_Z_B)`` (``obstacle_xy_b``'s x, y) in the EE frame, ``(N, 3)``."""
+    p_ee, R_ee = _ee_frame(env, asset_cfg, offset)
+    xy = obstacle_xy_b(env)
+    point = torch.cat([xy, torch.full_like(xy[:, :1], OBSTACLE_Z_B)], dim=-1)
+    return to_ee_frame(p_ee, R_ee, point.unsqueeze(1)).squeeze(1)
+
+
 def canonical_quat(q_wxyz: torch.Tensor) -> torch.Tensor:
     """``q`` with ``w >= 0``: the sign the collector's ``mat_to_quat_wxyz`` gives the demos'
     part quaternions. ``q`` and ``-q`` are one rotation but two input vectors to a policy."""

@@ -36,6 +36,8 @@ from .tasks.furniture.square_table import MESH_FRAMES, PART_NAMES, mesh_frame
 __all__ = [
     "Demo", "load_demo", "quat_xyzw_to_wxyz", "quat_to_mat", "mat_to_quat",
     "mat_to_rot6d", "rot6d_to_mat", "resip_unscale_rotation", "FB_STATE_KEYS", "fb_state", "fb_abs_state", "fb_abs_action", "fb_abs_frames", "obstacle_tag_rot6d", "resip_abs_states",
+    "OBSTACLE_Z_B", "REL_POS_LIMIT", "ROT6D_IDENTITY", "ee_relative_states", "ee_relative_actions",
+    "mat_to_axis_angle", "ee_delta_actions",
 ]
 
 #: FurnitureBench's DEFAULT_STATE_OBS keys of ``robot_state``, in order (then ``parts_poses``)
@@ -240,6 +242,89 @@ def resip_abs_states(robot_state: np.ndarray, parts_tag_xyzw: np.ndarray, front_
     front = np.broadcast_to(np.asarray(front_robot, dtype=np.float64), (T, 3))
     out = np.concatenate([robot_state, np.concatenate([pos_b, rot_b], axis=-1).reshape(T, -1), front[:, :2]], axis=1)
     return out.astype(np.float32)
+
+
+# ------------------------------------------ the -FBRel-ResiP-v0 interface (relative to the EE), NumPy
+#: the front obstacle's base-frame z (``mdp.OBSTACLE_Z_B``): the recordings' ``obstacles_robot`` z
+OBSTACLE_Z_B = 0.0
+#: the ResiP observation (``FBABS_RESIP_OBS_LAYOUT``) these read: robot state 16, 5 parts x 9, obstacle x, y
+_RESIP_ABS_DIM = 63
+#: m per EE axis of an action ``dpos`` of 1 (``mdp.FurnitureBenchRelActionCfg.pos_limit``)
+REL_POS_LIMIT = 0.12
+#: rot6d of the identity (``mdp.actions.ROT6D_IDENTITY``): the action's rotation is a rot6d minus this
+ROT6D_IDENTITY = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+
+
+def _ee_pose_of(state_abs: np.ndarray) -> tuple:
+    """A ResiP observation row's EE pose: position ``(3,)`` and rotation ``(3, 3)``, base frame."""
+    return state_abs[0:3], rot6d_to_mat(state_abs[3:9])
+
+
+def ee_relative_states(states_abs: np.ndarray) -> np.ndarray:
+    """ResiP observations ``(T, 63)`` (``resip_abs_states``) -> the ``-FBRel-ResiP-v0`` observation
+    ``(T, 55)`` (``FBREL_RESIP_OBS_LAYOUT``): the EE's linear and angular velocity in its own frame
+    (``R_ee^T v``, ``R_ee^T w``), the finger separation, each part ``[R_ee^T (p - p_ee),
+    rot6d(R_ee^T R)]``, the front obstacle's point ``(x, y, OBSTACLE_Z_B)`` in the EE frame -- the
+    NumPy twin of ``mdp.ee_vel_ee``, ``mdp.parts_poses_ee_rot6d`` and ``mdp.obstacle_pos_ee``."""
+    s = np.asarray(states_abs, dtype=np.float64)
+    if s.ndim != 2 or s.shape[1] != _RESIP_ABS_DIM:
+        raise ValueError(f"ee_relative_states reads the ResiP observation (T, {_RESIP_ABS_DIM}), got {s.shape}")
+    out = []
+    for row in s:
+        p_ee, R_ee = _ee_pose_of(row)
+        Rt = R_ee.T
+        parts = [
+            np.concatenate([Rt @ (q[0:3] - p_ee), mat_to_rot6d(Rt @ rot6d_to_mat(q[3:9]))]) for q in row[16:61].reshape(-1, 9)
+        ]
+        obstacle = Rt @ (np.array([row[61], row[62], OBSTACLE_Z_B]) - p_ee)
+        out.append(np.concatenate([Rt @ row[9:12], Rt @ row[12:15], row[15:16], *parts, obstacle]))
+    return np.asarray(out, dtype=np.float32)
+
+
+def ee_relative_actions(states_abs: np.ndarray, actions_abs: np.ndarray, pos_limit: float = REL_POS_LIMIT) -> np.ndarray:
+    """Absolute targets ``(T, 10)`` (``action.abs``) -> the ``-FBRel-`` action ``(T, 10)``, each
+    relative to the EE pose of the observation it was taken in (``states_abs`` row ``t``, ``(T, 63)``
+    or ``(T + 1, 63)``), in the EE's frame: ``[R_ee^T (goal - p_ee) / pos_limit,
+    rot6d(R_ee^T R_goal) - ROT6D_IDENTITY, gripper]``, the pose part clipped to [-1, 1] as the term
+    clips it -- the inverse of ``mdp.FurnitureBenchRelAction`` (exact inside [-1, 1])."""
+    s, a = np.asarray(states_abs, dtype=np.float64), np.asarray(actions_abs, dtype=np.float64)
+    if a.ndim != 2 or a.shape[1] != 10 or s.shape[0] < a.shape[0] or s.shape[1] != _RESIP_ABS_DIM:
+        raise ValueError(f"ee_relative_actions needs actions (T, 10) and their observations (>= T, {_RESIP_ABS_DIM}), got {a.shape} / {s.shape}")
+    out = []
+    for row, act in zip(s, a):
+        p_ee, R_ee = _ee_pose_of(row)
+        pose = np.concatenate([R_ee.T @ (act[0:3] - p_ee) / pos_limit, mat_to_rot6d(R_ee.T @ rot6d_to_mat(act[3:9])) - np.asarray(ROT6D_IDENTITY)])
+        out.append(np.concatenate([np.clip(pose, -1.0, 1.0), act[9:10]]))
+    return np.asarray(out, dtype=np.float32)
+
+
+# ------------------------------------------ the -FBDelta-ResiP-v0 action (relative to the EE), NumPy
+def mat_to_axis_angle(R: np.ndarray) -> np.ndarray:
+    """3x3 -> its axis-angle ``(3,)`` (the unit axis times the angle in [0, pi], rad); the identity
+    -> 0. The inverse of ``mdp.rot6d.axis_angle_to_mat``."""
+    q = np.asarray(mat_to_quat(np.asarray(R, dtype=np.float64)), dtype=np.float64)  # wxyz
+    q = -q if q[0] < 0 else q
+    s = float(np.linalg.norm(q[1:4]))
+    if s < 1e-12:
+        return 2.0 * q[1:4]
+    return q[1:4] * (2.0 * np.arctan2(s, q[0]) / s)
+
+
+def ee_delta_actions(states_abs: np.ndarray, actions_abs: np.ndarray, pos_limit: float = REL_POS_LIMIT) -> np.ndarray:
+    """Absolute targets ``(T, 10)`` (``action.abs``) -> the ``-FBDelta-`` action ``(T, 7)``, each
+    relative to the EE pose of the observation it was taken in (``states_abs`` row ``t``, ``(T, 63)``
+    or ``(T + 1, 63)``), in the EE's frame: ``[R_ee^T (goal - p_ee) / pos_limit,
+    axis_angle(R_ee^T R_goal), gripper]``, the pose part clipped to [-1, 1] as the term clips it --
+    the inverse of ``mdp.FurnitureBenchDeltaAction`` (exact inside [-1, 1])."""
+    s, a = np.asarray(states_abs, dtype=np.float64), np.asarray(actions_abs, dtype=np.float64)
+    if a.ndim != 2 or a.shape[1] != 10 or s.shape[0] < a.shape[0] or s.shape[1] != _RESIP_ABS_DIM:
+        raise ValueError(f"ee_delta_actions needs actions (T, 10) and their observations (>= T, {_RESIP_ABS_DIM}), got {a.shape} / {s.shape}")
+    out = []
+    for row, act in zip(s, a):
+        p_ee, R_ee = _ee_pose_of(row)
+        pose = np.concatenate([R_ee.T @ (act[0:3] - p_ee) / pos_limit, mat_to_axis_angle(R_ee.T @ rot6d_to_mat(act[3:9]))])
+        out.append(np.concatenate([np.clip(pose, -1.0, 1.0), act[9:10]]))
+    return np.asarray(out, dtype=np.float32)
 
 
 def obstacle_tag_rot6d(front_pos_robot: Any) -> np.ndarray:

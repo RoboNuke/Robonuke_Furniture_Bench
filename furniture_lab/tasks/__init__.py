@@ -34,6 +34,10 @@ for _suffix, _cfg in (
     ("ResiP", "OneLegResiPEnvCfg"),
     ("FB-ResiP", "OneLegFBResiPEnvCfg"),
     ("FBAbs-ResiP", "OneLegFBAbsResiPEnvCfg"),
+    # the same sim with the observation and the action relative to the end-effector
+    ("FBRel-ResiP", "OneLegFBRelResiPEnvCfg"),
+    # the same sim and observation with the action relative to the end-effector (axis-angle rotation)
+    ("FBDelta-ResiP", "OneLegFBDeltaResiPEnvCfg"),
     # the same with hybrid force/position control on joint torques (mdp/hybrid.py)
     ("FBAbs-ResiP-Hybrid", "OneLegFBAbsResiPHybridEnvCfg"),
 ):

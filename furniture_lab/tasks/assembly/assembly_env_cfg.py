@@ -390,6 +390,10 @@ class EventCfg:
 @configclass
 class RewardsCfg:
     assembled = RewTerm(func=mdp.newly_assembled, weight=1.0)
+    # a constant per-step term, off at weight 0 (the reward manager skips a zero-weight term);
+    # task.cfg.rewards.step.weight: -1.0 is Policy Decorator's -1 per step (the manager scales every
+    # term by step_dt; robonuke_rl_core divides it back out)
+    step = RewTerm(func=mdp.each_step, weight=0.0)
 
 
 @configclass
@@ -651,6 +655,18 @@ FBABS_ACTION_DIM = 10
 #: rot6d]``, not the tag frame), then the front obstacle's base-frame x, y (it slides per episode;
 #: its z and rotation never change), 63
 FBABS_RESIP_OBS_LAYOUT = FBABS_OBS_LAYOUT[:-1] + (("parts_poses_b", 45), ("obstacle_xy", 2))
+#: the ``-FBRel-ResiP-v0`` observation, every pose relative to the EE (the EE pose itself is not
+#: observed): the EE's linear and angular velocity in its own frame, the finger separation, each
+#: part ``[R_ee^T (p - p_ee), rot6d(R_ee^T R)]``, the front obstacle's point (x, y, 0) in the EE
+#: frame, 55 (``demos.ee_relative_states`` builds it from the 63-wide ResiP observation)
+FBREL_RESIP_OBS_LAYOUT = (
+    ("ee_pos_vel", 3), ("ee_ori_vel", 3), ("gripper_width", 1), ("parts_poses_ee", 45), ("obstacle_pos_ee", 3)
+)
+#: ``[dpos 3, drot6d 6, gripper]``, relative to the current EE pose in its own frame
+FBREL_ACTION_DIM = 10
+#: the ``-FBDelta-ResiP-v0`` action: ``[dpos 3, drot 3 (axis-angle), gripper]``, relative to the
+#: current EE pose in its own frame (its observation is the FBAbs ResiP one, ``FBABS_RESIP_OBS_LAYOUT``)
+FBDELTA_ACTION_DIM = 7
 
 
 def fbabs_obs_layout(env_cfg) -> tuple:
@@ -793,7 +809,8 @@ def apply_resip(cfg) -> None:
     if getattr(cfg.actions, "hybrid", None) is not None:
         pass  # the hybrid torque term drives the arm itself (OneLegFBAbsResiPHybridEnvCfg)
     elif fb is not None:
-        fb.arm = dik_arm_cfg(absolute=fb.class_type.__name__ == "FurnitureBenchAbsAction")
+        # the absolute term and its subclasses (the -FBRel- term sends absolute targets too)
+        fb.arm = dik_arm_cfg(absolute=issubclass(fb.class_type, mdp.FurnitureBenchAbsAction))
     else:
         cfg.actions.arm = dik_arm_cfg(absolute=False)
     cfg.apply_ik()
@@ -825,6 +842,65 @@ class OneLegFBAbsResiPEnvCfg(OneLegFBAbsEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         apply_resip(self)
+
+
+# ------------------------------------- everything relative to the end-effector (-FBRel-)
+@configclass
+class FBRelResiPObservationsCfg:
+    """The ResiP observation with every pose relative to the EE and no EE pose
+    (``FBREL_RESIP_OBS_LAYOUT``, 55)."""
+
+    @configclass
+    class PolicyCfg(ObsGroup):
+        # named ee_vel so FurnitureCfg.ee_vel_point reaches it (apply_observations)
+        ee_vel = ObsTerm(func=mdp.ee_vel_ee, params={"asset_cfg": EE_BODY})
+        gripper_width = ObsTerm(
+            func=mdp.gripper_width,
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names="panda_finger_joint.*")},
+        )
+        parts_poses = ObsTerm(func=mdp.parts_poses_ee_rot6d, params={"asset_cfg": EE_BODY, "offset": EE_OFFSET})
+        obstacle_pos = ObsTerm(func=mdp.obstacle_pos_ee, params={"asset_cfg": EE_BODY, "offset": EE_OFFSET})
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    policy: PolicyCfg = PolicyCfg()
+
+
+@configclass
+class FBRelActionsCfg:
+    """``[dpos 3, drot6d 6, gripper]`` relative to the EE, in its frame (``mdp.FurnitureBenchRelAction``)."""
+
+    fb = mdp.FurnitureBenchRelActionCfg(asset_name="robot", arm=abs_arm_cfg(), gripper=ActionsCfg().gripper)
+
+
+@configclass
+class OneLegFBRelResiPEnvCfg(OneLegFBAbsResiPEnvCfg):
+    """``OneLegFBAbsResiPEnvCfg`` (ResiP's sim, the same physics, arm controller and gripper) with
+    the observation and the action relative to the end-effector: observation 55
+    (``FBREL_RESIP_OBS_LAYOUT``), action 10 (``FBREL_ACTION_DIM``). Only the interface differs, so
+    switching a config between the two is its task name."""
+
+    observations: FBRelResiPObservationsCfg = FBRelResiPObservationsCfg()
+    actions: FBRelActionsCfg = FBRelActionsCfg()
+
+
+@configclass
+class FBDeltaActionsCfg:
+    """``[dpos 3, drot 3 (axis-angle), gripper]`` relative to the EE, in its frame (``mdp.FurnitureBenchDeltaAction``)."""
+
+    fb = mdp.FurnitureBenchDeltaActionCfg(asset_name="robot", arm=abs_arm_cfg(), gripper=ActionsCfg().gripper)
+
+
+@configclass
+class OneLegFBDeltaResiPEnvCfg(OneLegFBAbsResiPEnvCfg):
+    """``OneLegFBAbsResiPEnvCfg`` (ResiP's sim, the same physics, arm controller, gripper and
+    observation, ``FBABS_RESIP_OBS_LAYOUT``) with the action relative to the end-effector: 7
+    (``FBDELTA_ACTION_DIM``). Only the action differs, so switching a config between the two is
+    its task name."""
+
+    actions: FBDeltaActionsCfg = FBDeltaActionsCfg()
 
 
 # ------------------------------------- hybrid force/position control on joint torques

@@ -26,6 +26,8 @@ upstream and what is this port's choice.
 | `Isaac-Furniture-OneLeg-v0` | this port's 56-d (base frame, wxyz, + last action) | 7-d: OSC `pose_rel` (scaled) + binary gripper | RL |
 | `Isaac-Furniture-OneLeg-FB-v0` | **FurnitureBench's own** 49-d `DEFAULT_STATE_OBS` (`ee_pos, ee_quat xyzw, ee_pos_vel, ee_ori_vel, gripper_width, parts_poses` in the AprilTag frame) | **FurnitureBench's own** 8-d `[dpos, dquat xyzw (EE frame), gripper]`, driving the same OSC + gripper (`mdp.FurnitureBenchAction`) | policies trained on the demo pkls (BC, residual) |
 | `Isaac-Furniture-OneLeg-FBAbs-v0` | the FB observation with **every orientation as rot6d** (61-d: `ee_pos, ee_rot6d, ee_pos_vel, ee_ori_vel, gripper_width, parts 5 x [pos, rot6d]`) | 10-d **absolute** target `[goal_pos (base frame), goal_rot6d, gripper]` on the OSC in `pose_abs` mode (`mdp.FurnitureBenchAbsAction`) -- ResiP's `control_mode: pos` | diffusion policies (absolute targets regress better than deltas); the importer derives both columns from the pkls (`furniture_lab.demos.fb_abs_frames`) |
+| `Isaac-Furniture-OneLeg-FBRel-ResiP-v0` | **relative to the end-effector**, no EE pose (55-d, `FBREL_RESIP_OBS_LAYOUT`): the EE's linear and angular velocity in its own frame (`mdp.ee_vel_ee`), `gripper_width`, each part `[R_ee^T (p - p_ee), rot6d(R_ee^T R)]` (`mdp.parts_poses_ee_rot6d`), the front obstacle's point (x, y, 0) in the EE frame (`mdp.obstacle_pos_ee`) | 10-d **relative** `[dpos, drot, gripper]` in the EE's frame, the pose part in [-1, 1] (`mdp.FurnitureBenchRelAction`, clipped): `dpos` in units of `pos_limit` (0.12 m), `drot` a rot6d minus the identity's; the target `p_ee + pos_limit R_ee dpos`, `R_ee R(drot + [1, 0, 0, 0, 1, 0])`, sent on as the absolute term's (the same IK and gripper); zeros hold the EE | `-FBAbs-ResiP-v0`'s sim with only the interface changed; the demos' columns come from `demos.ee_relative_states` / `ee_relative_actions`, the NumPy twins of those terms |
+| `Isaac-Furniture-OneLeg-FBDelta-ResiP-v0` | the FBAbs ResiP observation (63-d, `FBABS_RESIP_OBS_LAYOUT`) | 7-d **relative** `[dpos, drot, gripper]` in the EE's frame, the pose part in [-1, 1] (`mdp.FurnitureBenchDeltaAction`, clipped): `dpos` in units of `pos_limit` (0.12 m), `drot` an axis-angle in rad; the target `p_ee + pos_limit R_ee dpos`, `R_ee Exp(drot)`, driven as the absolute term's (the same IK and gripper); zeros hold the EE | `-FBAbs-ResiP-v0` with only the action changed; the demos' column comes from `demos.ee_delta_actions`, the term's NumPy twin |
 | `Isaac-Furniture-OneLeg-FBAbs-ResiP-Hybrid-v0` | as `-FBAbs-v0` | 16-d: the abs target + selection 3 + force target 3, on joint torques (`mdp.HybridTorqueAbsAction`, ResiP's sim) | hybrid force/position residuals |
 | `Isaac-Furniture-SquareTable-v0` | as the first | as the first | all four legs |
 
@@ -82,7 +84,12 @@ pip install -e .   # editable: the asset catalog resolves assets/ from this chec
   gripper (`< 0` closes).
 * **Observation** (56-D): EE position, quaternion (wxyz), 6-D velocity, gripper width, the
   five parts' poses (7 each, robot-base frame), and the previous action.
-* **Reward**: upstream's sparse +1 per newly assembled pair, once per episode. No shaping.
+* **Reward**: upstream's sparse +1 per newly assembled pair, once per episode. No shaping by
+  default. `rewards.step` (`mdp.each_step`, 1 every step) is there at weight 0, which the reward
+  manager skips; `task.cfg.rewards.step.weight: -1.0` makes it Policy Decorator's -1 per step
+  (the success step pays both). Isaac Lab's reward manager scales every term by `step_dt` (at
+  10 Hz the env itself pays 0.1 for the assembly); robonuke_rl_core divides that back out, so its
+  learners see the weights as written: 1 for the assembly, -1 per step.
 * **Done**: success (every pair assembled), `episode_length_s` (30 s by default), or a part
   fallen off the table (added here).
 * **Success** (`furniture.success_mode`): `soft`, the default, is upstream's single-step latch
@@ -230,6 +237,20 @@ against finite differences of a 7-joint arm's TCP). Isaac Lab's OSC term has the
   state, the five parts (`mdp.parts_poses_b_rot6d`, not the AprilTag frame), then the front
   obstacle's x, y (`mdp.obstacle_xy_b`; its z and rotation never change): 63 wide
   (`FBABS_RESIP_OBS_LAYOUT`; `demos.resip_abs_states` builds it from pkls and ResiP's zarr).
+* The relative task (`-FBRel-ResiP-v0`, `OneLegFBRelResiPEnvCfg`) is that task with the observation
+  and the action relative to the EE pose `ee_pos` / `ee_rot6d` report (`FBREL_RESIP_OBS_LAYOUT`, 55;
+  action 10). The front obstacle enters as its point (x, y, `OBSTACLE_Z_B` = 0): its base-frame z
+  never changes and is 0 in the sim and in the pkls' `obstacles_robot`. The action's pose part is
+  in [-1, 1] and the term clips it there: `dpos` in units of `FurnitureBenchRelActionCfg.pos_limit`
+  (0.12 m per EE axis, the scripted collector's largest per-step x / y delta; `demos.REL_POS_LIMIT`),
+  `drot` the rotation's rot6d minus the identity's (`ROT6D_IDENTITY`, `[1, 0, 0, 0, 1, 0]`), so
+  the zero action holds the EE. An action is the target's lead on the current pose, as the demos'
+  deltas are; `demos.ee_relative_actions` clips the demos' few longer leads (the post-assembly
+  lift) to the limit, as the term would.
+* The delta task (`-FBDelta-ResiP-v0`, `OneLegFBDeltaResiPEnvCfg`) is the FBAbs ResiP task with only
+  the action changed: the relative action with its rotation as a 3-d axis-angle in rad
+  (`mdp.FurnitureBenchDeltaAction`; `mdp.rot6d.axis_angle_to_mat`, `demos.mat_to_axis_angle`), 7
+  (`FBDELTA_ACTION_DIM`), the same `pos_limit` and clipping as the relative task's.
 
 ### Demo variety (`--vary`, `--dart_prob`)
 

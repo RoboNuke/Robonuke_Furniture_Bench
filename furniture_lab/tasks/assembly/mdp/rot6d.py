@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import torch
 
-__all__ = ["mat_to_rot6d", "rot6d_to_mat", "quat_to_mat", "mat_to_quat", "quat_to_rot6d", "rot6d_to_quat"]
+__all__ = ["mat_to_rot6d", "rot6d_to_mat", "quat_to_mat", "mat_to_quat", "quat_to_rot6d", "rot6d_to_quat", "axis_angle_to_mat"]
 
 
 def mat_to_rot6d(R: torch.Tensor) -> torch.Tensor:
@@ -82,3 +82,19 @@ def quat_to_rot6d(q: torch.Tensor) -> torch.Tensor:
 
 def rot6d_to_quat(d6: torch.Tensor) -> torch.Tensor:
     return mat_to_quat(rot6d_to_mat(d6))
+
+
+def axis_angle_to_mat(v: torch.Tensor) -> torch.Tensor:
+    """``(..., 3)`` axis-angle (the unit axis times the angle, rad) -> ``(..., 3, 3)`` by Rodrigues'
+    formula; the zero vector is the identity (``demos.mat_to_axis_angle`` is the inverse)."""
+    x, y, z = v[..., 0], v[..., 1], v[..., 2]
+    zero = torch.zeros_like(x)
+    K = torch.stack((zero, -z, y, z, zero, -x, -y, x, zero), dim=-1).reshape(*v.shape[:-1], 3, 3)
+    theta = v.norm(dim=-1)[..., None, None]
+    small = theta < 1e-6
+    t = torch.where(small, torch.ones_like(theta), theta)
+    # sin(t) / t and (1 - cos t) / t^2, by their Taylor series near 0
+    a = torch.where(small, 1 - theta**2 / 6, torch.sin(t) / t)
+    b = torch.where(small, 0.5 - theta**2 / 24, (1 - torch.cos(t)) / t**2)
+    eye = torch.eye(3, dtype=v.dtype, device=v.device).expand(K.shape)
+    return eye + a * K + b * (K @ K)

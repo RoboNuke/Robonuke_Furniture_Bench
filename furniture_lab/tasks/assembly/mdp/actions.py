@@ -163,3 +163,81 @@ class FurnitureBenchAbsActionCfg(FurnitureBenchActionCfg):
     """``arm`` must be the OSC term in ``pose_abs`` mode with unit scales."""
 
     class_type: type = FurnitureBenchAbsAction
+
+
+#: rot6d of the identity (``demos.ROT6D_IDENTITY``): the ``-FBRel-`` action's rotation is a rot6d
+#: minus this, so a zero rotation action keeps the EE's orientation
+ROT6D_IDENTITY = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+
+
+class FurnitureBenchRelAction(FurnitureBenchAbsAction):
+    """The ``-FBRel-`` interface: ``[dpos 3, drot 6, gripper]``, the pose part in [-1, 1] (clipped
+    to it), relative to the current EE pose (the one ``ee_pos`` / ``ee_rot6d`` observe), both in
+    the EE's own frame: ``dpos`` in units of ``cfg.pos_limit`` (m per EE axis), ``drot`` the
+    rotation's rot6d minus the identity's (:data:`ROT6D_IDENTITY`). The target is
+    ``goal_pos = p_ee + pos_limit R_ee dpos``, ``R_goal = R_ee R(drot + ROT6D_IDENTITY)``, sent on
+    as :class:`FurnitureBenchAbsAction`'s absolute target (the same arm and gripper terms). A zero
+    pose part holds the EE where it is. ``demos.ee_relative_actions`` is the inverse, for the
+    demos."""
+
+    def process_actions(self, actions: torch.Tensor) -> None:
+        from .rot6d import mat_to_rot6d, quat_to_mat, rot6d_to_mat
+
+        pose = actions[:, 0:9].clamp(-1.0, 1.0)
+        p_ee, q_ee = _ee_pose_b(self._env, self._ee_cfg, self._offset)
+        R_ee = quat_to_mat(q_ee)
+        goal_pos = p_ee + self.cfg.pos_limit * (R_ee @ pose[:, 0:3].unsqueeze(-1)).squeeze(-1)
+        R_goal = R_ee @ rot6d_to_mat(pose[:, 3:9] + pose.new_tensor(ROT6D_IDENTITY))
+        super().process_actions(torch.cat([goal_pos, mat_to_rot6d(R_goal), actions[:, 9:10]], dim=-1))
+        self._raw[:] = actions  # the relative action as the policy sent it
+
+
+@configclass
+class FurnitureBenchRelActionCfg(FurnitureBenchAbsActionCfg):
+    """``arm`` as :class:`FurnitureBenchAbsActionCfg`'s (absolute targets)."""
+
+    class_type: type = FurnitureBenchRelAction
+    #: m per EE axis that an action ``dpos`` of 1 moves the target (``demos.REL_POS_LIMIT``):
+    #: the scripted collector's largest per-step x / y delta (``scripted_policy``'s ``max_delta``)
+    pos_limit: float = 0.12
+
+
+class FurnitureBenchDeltaAction(FurnitureBenchAbsAction):
+    """The ``-FBDelta-`` interface: ``[dpos 3, drot 3, gripper]`` (7), the pose part in [-1, 1]
+    (clipped to it), relative to the current EE pose (the one ``ee_pos`` / ``ee_rot6d`` observe),
+    both in the EE's own frame: ``dpos`` in units of ``cfg.pos_limit`` (m per EE axis), ``drot``
+    an axis-angle in rad. The target is ``goal_pos = p_ee + pos_limit R_ee dpos``,
+    ``R_goal = R_ee Exp(drot)``, driven as :class:`FurnitureBenchAbsAction` drives its absolute
+    target (the same arm and gripper terms). The zero pose part holds the EE.
+    ``demos.ee_delta_actions`` is the inverse, for the demos."""
+
+    def __init__(self, cfg: "FurnitureBenchDeltaActionCfg", env: "ManagerBasedEnv") -> None:
+        super().__init__(cfg, env)
+        self._raw = torch.zeros(self.num_envs, 7, device=self.device)
+
+    @property
+    def action_dim(self) -> int:
+        return 7
+
+    def process_actions(self, actions: torch.Tensor) -> None:
+        from .rot6d import axis_angle_to_mat, mat_to_quat, quat_to_mat
+
+        self._raw[:] = actions
+        pose = actions[:, 0:6].clamp(-1.0, 1.0)
+        p_ee, q_ee = _ee_pose_b(self._env, self._ee_cfg, self._offset)
+        R_ee = quat_to_mat(q_ee)
+        goal_pos = p_ee + self.cfg.pos_limit * (R_ee @ pose[:, 0:3].unsqueeze(-1)).squeeze(-1)
+        quat = mat_to_quat(R_ee @ axis_angle_to_mat(pose[:, 3:6]))  # wxyz, the OSC's pose_abs convention
+        grip = -self._grip(actions[:, 6:7])  # upstream: < 0 opens; Isaac Lab's binary term: < 0 closes
+        self._processed[:] = torch.cat([goal_pos, quat, grip], dim=-1)
+        self.arm.process_actions(self._processed[:, 0:7])
+        self.gripper.process_actions(self._processed[:, 7:8])
+
+
+@configclass
+class FurnitureBenchDeltaActionCfg(FurnitureBenchAbsActionCfg):
+    """``arm`` as :class:`FurnitureBenchAbsActionCfg`'s (absolute targets)."""
+
+    class_type: type = FurnitureBenchDeltaAction
+    #: m per EE axis that an action ``dpos`` of 1 moves the target (``demos.REL_POS_LIMIT``)
+    pos_limit: float = 0.12
