@@ -394,6 +394,13 @@ class RewardsCfg:
     # task.cfg.rewards.step.weight: -1.0 is Policy Decorator's -1 per step (the manager scales every
     # term by step_dt; robonuke_rl_core divides it back out)
     step = RewTerm(func=mdp.each_step, weight=0.0)
+    # one_leg's phase rewards, each off at weight 0: weight w on the step the episode gets past that
+    # phase (furniture.track_phases' criteria, assembly/phases.py; it must be on), once per episode
+    # -- corner: the top pushed into the corner and let go, grasp: leg 4 held and lifted, insert:
+    # the leg left standing in its hole. Success is ``assembled``
+    corner_done = RewTerm(func=mdp.phase_done, weight=0.0, params={"phase": "corner"})
+    grasp_done = RewTerm(func=mdp.phase_done, weight=0.0, params={"phase": "grasp"})
+    insert_done = RewTerm(func=mdp.phase_done, weight=0.0, params={"phase": "insert"})
 
 
 @configclass

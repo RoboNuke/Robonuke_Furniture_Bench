@@ -124,6 +124,29 @@ def test_each_step_pays_one_to_every_env(cfg_module):
     assert torch.equal(rewards.each_step(env), torch.ones(3))
 
 
+def test_the_phase_rewards_are_there_and_off(cfg_module):
+    cfg = cfg_module.OneLegEnvCfg()
+    for name, phase in (("corner_done", "corner"), ("grasp_done", "grasp"), ("insert_done", "insert")):
+        term = getattr(cfg.rewards, name)
+        assert term.func.__name__ == "phase_done" and term.params == {"phase": phase} and term.weight == 0.0
+
+
+def test_a_phase_reward_pays_on_the_step_its_phase_is_passed(cfg_module):
+    import pytest
+    import torch
+
+    rewards = importlib.import_module("furniture_lab.tasks.assembly.mdp.rewards")
+    phases = type("P", (), {"newly": torch.tensor([[True, False, False], [False, True, True], [False, False, False]])})()
+    env = type("Env", (), {"num_envs": 3, "device": "cpu", "phases": phases})()
+    assert rewards.phase_done(env, "corner").tolist() == [1.0, 0.0, 0.0]
+    assert rewards.phase_done(env, "grasp").tolist() == [0.0, 1.0, 0.0]
+    assert rewards.phase_done(env, "insert").tolist() == [0.0, 1.0, 0.0]
+    with pytest.raises(ValueError, match="track_phases"):
+        rewards.phase_done(type("Env", (), {"num_envs": 3, "device": "cpu", "phases": None})(), "corner")
+    with pytest.raises(ValueError, match="phase must be"):
+        rewards.phase_done(env, "screw")
+
+
 def test_registry_entry_points_resolve(cfg_module):
     import gymnasium as gym
 

@@ -36,9 +36,14 @@ Published, after the terminations and before any reset clears the state (``Assem
   (``phase_goal/<measurement>``) and ``phase/max_steps``;
 * at episode end, ``infos["episode_metrics_to_log"]`` (one value per episode in the eval's
   summary): ``phase/reached`` (the furthest phase, 4 = success), ``phase/end`` (4 / 5 / 6) and
-  ``phase/<corner|grasp|insert>_step`` (the step it was done on; NaN if never) and
+  ``phase/<corner|grasp|insert>_step`` (the step it was done on; NaN if never),
   ``phase/corner_release_mm`` (the top's distance from the corner goal when the gripper let go
-  of it; NaN if never).
+  of it; NaN if never) and ``phase/passed_<corner|grasp|insert|success>`` (1 if the episode got
+  past that stage, else 0: their mean over episodes is the share of rollouts reaching it).
+
+:attr:`OneLegPhases.newly` ``(N, 3)`` marks the phases (Corner, Grasp, Insert) each env got past
+this step, for the phase rewards (``mdp.phase_done``): the update runs inside the termination
+manager's compute, before the reward manager's in the same step.
 
 The geometry is pure torch (below, tested on CPU); :class:`OneLegPhases` reads the env.
 """
@@ -176,6 +181,8 @@ class OneLegPhases:
         self.angle_prev = torch.zeros(n, device=dev)
         self.turned = torch.zeros(n, device=dev)
         self.done_step = torch.full((n, 3), math.nan, device=dev)
+        #: the phases (Corner, Grasp, Insert) each env got past on the last update
+        self.newly = torch.zeros((n, 3), dtype=torch.bool, device=dev)
         full = lambda v: torch.full((n,), float(v), device=dev)  # noqa: E731
         self.goals = {
             "phase_goal/top_grip_mm": full(fcfg.phase_top_grip_width * 1000),
@@ -249,6 +256,7 @@ class OneLegPhases:
         steps = env.episode_length_buf.to(torch.float32)
         for k in (CORNER, GRASP, INSERT):
             newly = (old <= k) & (self.phase > k)
+            self.newly[:, k] = newly
             self.done_step[:, k] = torch.where(newly, steps, self.done_step[:, k])
         left_corner = (old == CORNER) & (self.phase > CORNER)
         self.corner_release = torch.where(left_corner, corner, self.corner_release)
@@ -299,4 +307,6 @@ class OneLegPhases:
             "phase/end": torch.where(done, end.to(torch.float32), nan),
             **{f"phase/{name}_step": self.done_step[:, k].clone() for k, name in enumerate(PHASES[:3])},
             "phase/corner_release_mm": self.corner_release * 1000,
+            **{f"phase/passed_{name}": (reached > k).to(torch.float32) for k, name in enumerate(PHASES[:3])},
+            "phase/passed_success": (reached == SUCCESS).to(torch.float32),
         }

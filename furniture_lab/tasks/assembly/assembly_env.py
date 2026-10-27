@@ -7,7 +7,9 @@ package's Forge wrapper that would is Forge-only, so the env publishes it itself
 
 The value has to be captured **before** the reset clears the assembly latch for the envs
 that finished, which is why it is taken in ``_reset_idx`` and attached to ``extras`` after
-the step.
+the step. ``episode/out_of_bounds`` (1 where the ``part_out_of_limits`` termination ended the
+episode; its mean over episodes, the share of out-of-bounds failures) is captured the same way,
+for every cfg that has that term.
 
 The env also owns the joint-torque wrench estimator (``wrench.py``, ``env.wrench``). It
 has to run every physics substep, and a manager-based env gives its terms no substep hook;
@@ -41,6 +43,9 @@ class AssemblyEnv(ManagerBasedRLEnv):
 
     def __init__(self, cfg, render_mode: str | None = None, **kwargs):
         self._episode_success = None
+        #: 1 where the ending episode was ended by the part_out_of_limits termination (episode/out_of_bounds);
+        #: None when the cfg has no such term
+        self._episode_out_of_bounds = None
         #: furniture.track_phases: one_leg's phase tracker (phases.py); furniture.log_wrench: the
         #: wrench estimate as it was after the step's terminations (before any reset zeroed it)
         self.phases = None
@@ -68,6 +73,8 @@ class AssemblyEnv(ManagerBasedRLEnv):
                 )
         super().__init__(cfg, render_mode, **kwargs)
         self._episode_success = torch.zeros(self.num_envs, device=self.device)
+        if "part_out_of_limits" in self.termination_manager.active_terms:
+            self._episode_out_of_bounds = torch.zeros(self.num_envs, device=self.device)
         self.wrench = JointTorqueWrench(self, cfg.furniture)
         apply_action = self.action_manager.apply_action
 
@@ -98,6 +105,8 @@ class AssemblyEnv(ManagerBasedRLEnv):
         if self._episode_success is not None and len(env_ids) > 0:
             # all pairs assembled at the moment the episode ended, upstream's success
             self._episode_success[env_ids] = tracker(self).all_assembled()[env_ids].float()
+            if self._episode_out_of_bounds is not None:
+                self._episode_out_of_bounds[env_ids] = self.termination_manager.get_term("part_out_of_limits")[env_ids].float()
             if self.cfg.furniture.log_resets:
                 self._log_reset(env_ids)
             self.wrench.reset(env_ids)
@@ -123,6 +132,9 @@ class AssemblyEnv(ManagerBasedRLEnv):
     def step(self, action: torch.Tensor):
         obs, rew, terminated, truncated, extras = super().step(action)
         extras["episode_metrics_to_log"] = {"episode/success": self._episode_success}
+        if self._episode_out_of_bounds is not None:
+            # the share of finished episodes a part leaving its limits ended (their mean over episodes)
+            extras["episode_metrics_to_log"]["episode/out_of_bounds"] = self._episode_out_of_bounds
         state = {}
         if self._wrench_out is not None:
             state["ee_wrench"] = self._wrench_out
