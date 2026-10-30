@@ -9,7 +9,8 @@ The value has to be captured **before** the reset clears the assembly latch for 
 that finished, which is why it is taken in ``_reset_idx`` and attached to ``extras`` after
 the step. ``episode/out_of_bounds`` (1 where the ``part_out_of_limits`` termination ended the
 episode; its mean over episodes, the share of out-of-bounds failures) is captured the same way,
-for every cfg that has that term.
+for every cfg that has that term. ``episode/isaac_steps`` is the ending episode's length on Isaac's own clock
+(``episode_length_buf`` before the reset), to check a wrapper's or learner's episode bookkeeping against.
 
 The env also owns the joint-torque wrench estimator (``wrench.py``, ``env.wrench``). It
 has to run every physics substep, and a manager-based env gives its terms no substep hook;
@@ -73,6 +74,8 @@ class AssemblyEnv(ManagerBasedRLEnv):
                 )
         super().__init__(cfg, render_mode, **kwargs)
         self._episode_success = torch.zeros(self.num_envs, device=self.device)
+        #: the ending episode's length on Isaac's own clock (episode_length_buf before the reset): episode/isaac_steps
+        self._episode_steps = torch.zeros(self.num_envs, device=self.device)
         if "part_out_of_limits" in self.termination_manager.active_terms:
             self._episode_out_of_bounds = torch.zeros(self.num_envs, device=self.device)
         self.wrench = JointTorqueWrench(self, cfg.furniture)
@@ -97,6 +100,8 @@ class AssemblyEnv(ManagerBasedRLEnv):
                     self._wrench_out = self.wrench.filtered.clone()
                 if self.phases is not None:
                     self.phases.update()
+                    # the no-progress reset (furniture.stall_steps_*) may have ended more episodes
+                    return self.termination_manager.dones
                 return dones
 
             self.termination_manager.compute = compute_then_track
@@ -105,6 +110,7 @@ class AssemblyEnv(ManagerBasedRLEnv):
         if self._episode_success is not None and len(env_ids) > 0:
             # all pairs assembled at the moment the episode ended, upstream's success
             self._episode_success[env_ids] = tracker(self).all_assembled()[env_ids].float()
+            self._episode_steps[env_ids] = self.episode_length_buf[env_ids].float()
             if self._episode_out_of_bounds is not None:
                 self._episode_out_of_bounds[env_ids] = self.termination_manager.get_term("part_out_of_limits")[env_ids].float()
             if self.cfg.furniture.log_resets:
@@ -131,7 +137,7 @@ class AssemblyEnv(ManagerBasedRLEnv):
 
     def step(self, action: torch.Tensor):
         obs, rew, terminated, truncated, extras = super().step(action)
-        extras["episode_metrics_to_log"] = {"episode/success": self._episode_success}
+        extras["episode_metrics_to_log"] = {"episode/success": self._episode_success, "episode/isaac_steps": self._episode_steps}
         if self._episode_out_of_bounds is not None:
             # the share of finished episodes a part leaving its limits ended (their mean over episodes)
             extras["episode_metrics_to_log"]["episode/out_of_bounds"] = self._episode_out_of_bounds

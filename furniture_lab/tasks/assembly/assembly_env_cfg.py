@@ -170,13 +170,23 @@ class FurnitureCfg:
     #: Insert is done once the fingers are open wider than ``phase_release_width`` (m; Corner's let
     #: go as well) and the leg
     #: has stayed in its hole (off-axis <= ``phase_hole_xz`` m, tilt <= ``phase_tilt_deg`` from the
-    #: seat axis) for ``phase_hold_steps`` consecutive steps
+    #: seat axis) for ``phase_hold_steps`` consecutive steps: 1 (default) is the first such step, as
+    #: FurnitureBench has no hold; more is opt-in
     phase_release_width: float = 0.05
     phase_hole_xz: float = 0.013
     phase_tilt_deg: float = 16.0
-    phase_hold_steps: int = 10
+    phase_hold_steps: int = 1
     #: display only: the overlay's force bar is full at this (N)
     phase_force_scale: float = 50.0
+    #: no-progress reset (track_phases): end an episode as a failure once leg 4 has moved at most ``stall_pos_mm``
+    #: (mm) and turned at most ``stall_rot_deg`` (deg) per step, step to step, for this many consecutive steps of Insert
+    #: (``stall_steps_insert``) or Screw (``stall_steps_screw``); 0 is off for that phase. Published every step as
+    #: ``eval_state`` ``phase/still`` (1: no progress this step), ``phase/still_steps`` and ``phase/stalled`` (1: the
+    #: episode ends for lack of progress), and at the episode's end as ``phase/stalled``
+    stall_steps_insert: int = 0
+    stall_steps_screw: int = 0
+    stall_pos_mm: float = 0.5
+    stall_rot_deg: float = 1.0
     #: each part's mass (kg), in ``part_names`` order, set by the startup mass events
     #: (``apply_masses``). Default: what FurnitureSim simulates (``ISAAC_GYM_MASS``: top 411.5 g,
     #: legs 26.4 / 26.5 / 26.4 / 29.1 g); ``PartSpec.mass`` holds the real parts' 151 g / 23.1 g

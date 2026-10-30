@@ -10,7 +10,7 @@ import torch
 from furniture_lab.failures import CORNER_CLEARANCE, TOP_HALF_WIDTH
 from furniture_lab.tasks.assembly.phases import (
     CORNER, FAILURE, GRASP, INSERT, SCREW, SUCCESS, TIMEOUT, advance, corner_done, corner_error, end_code, holds_top,
-    leg_in_hole, ori_error_deg,
+    LEG_TIP, leg_in_hole, leg_tip_off_axis, ori_error_deg,
 )
 from furniture_lab.tasks.furniture.frames import OBSTACLE_FRONT_SIZE, OBSTACLE_SIDE_SIZE
 
@@ -109,3 +109,77 @@ def test_a_lean_is_tilt_and_a_turn_about_the_seat_axis_is_angle():
     assert tilt.item() == pytest.approx(0.0, abs=1e-3)
     assert math.degrees(angle.item()) == pytest.approx(30.0, abs=1e-3)
     assert ori_error_deg(q).item() == pytest.approx(30.0, abs=1e-3)  # x and z each 30 deg off
+
+
+def test_the_tip_is_off_axis_by_the_shift_plus_the_lean_swinging_it_about_the_origin():
+    # upright, shifted across the axis: the tip is off by the shift; along it: not at all
+    shifted = (HOLE + torch.tensor([0.004, 0.02, 0.0])).unsqueeze(0)
+    assert leg_tip_off_axis(shifted, IDENTITY, HOLE, AXIS).item() == pytest.approx(0.004, abs=1e-6)
+    # leaning 20 deg about x with the origin on the axis: the tip (LEG_TIP along -axis) swings off by LEG_TIP sin 20
+    off = leg_tip_off_axis(HOLE.unsqueeze(0), quat_axis_angle([1, 0, 0], 20.0), HOLE, AXIS)
+    assert off.item() == pytest.approx(LEG_TIP * math.sin(math.radians(20.0)), abs=1e-6)
+    # the origin moved by the tip's swing the other way (R_x(20) takes -axis to (0, -cos, -sin)): the tip is back on it
+    lean = quat_axis_angle([1, 0, 0], 20.0)
+    back = (HOLE + torch.tensor([0.0, 0.0, LEG_TIP * math.sin(math.radians(20.0))])).unsqueeze(0)
+    assert leg_tip_off_axis(back, lean, HOLE, AXIS).item() == pytest.approx(0.0, abs=1e-6)
+
+
+def test_offline_leg_measures_match_the_trackers_geometry():
+    from furniture_lab.tasks.assembly.phases import leg_measures_from_states
+
+    states = torch.zeros(3, 63)
+    for p in range(5):
+        states[:, 16 + 9 * p + 3 : 16 + 9 * p + 9] = torch.tensor([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
+    # top at the origin, leg 4 (index 4) at the hole, then 10 mm above it, then 3 mm across (OBJ frame: y the axis)
+    hole = torch.tensor([-0.05625, 0.046875, -0.05625])
+    states[:, 16 + 9 * 4 : 16 + 9 * 4 + 3] = hole + torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.01, 0.0], [0.003, 0.0, 0.0]])
+    m = leg_measures_from_states(states, mesh_frame="obj")
+    assert m["phase/height_mm"].tolist() == pytest.approx([0.0, 10.0, 0.0], abs=1e-3)
+    assert m["phase/tip_mm"].tolist() == pytest.approx([0.0, 0.0, 3.0], abs=1e-3)
+    assert m["phase/tilt_deg"].tolist() == pytest.approx([0.0, 0.0, 0.0], abs=1e-2)
+
+
+def test_offline_phases_stay_in_corner_without_a_grasp_and_take_only_obs_shaped_input():
+    from furniture_lab.tasks.assembly.phases import phases_from_states
+
+    states = torch.zeros(20, 63)
+    states[:, 3:9] = torch.tensor([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])  # identity EE and parts
+    for p in range(5):
+        states[:, 16 + 9 * p + 3 : 16 + 9 * p + 9] = torch.tensor([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
+    states[:, 15] = 0.08  # fingers wide open: never holds the top
+    states[:, 0:3] = torch.tensor([0.5, 0.0, 0.5])  # the TCP far from every part
+    assert phases_from_states(states, mesh_frame="obj").tolist() == [CORNER] * 20
+    with pytest.raises(ValueError, match="63"):
+        phases_from_states(torch.zeros(5, 61), mesh_frame="obj")
+
+
+def test_the_no_progress_check_counts_still_steps_per_phase_and_stalls_at_the_limit():
+    """furniture.stall_steps_*: a step on which leg 4 moves at most stall_pos_mm and turns at most stall_rot_deg since
+    the last step is still; a bigger step, or a new phase, ends the run; the limit ends the episode (stalled)."""
+    from types import SimpleNamespace
+
+    import torch
+
+    from furniture_lab.tasks.assembly.phases import INSERT, SCREW, GRASP, OneLegPhases, PHASES
+
+    p = object.__new__(OneLegPhases)
+    p.cfg = SimpleNamespace(stall_pos_mm=0.5, stall_rot_deg=1.0)
+    p.stall_limit = torch.zeros(len(PHASES), dtype=torch.long)
+    p.stall_limit[INSERT], p.stall_limit[SCREW] = 3, 5
+    p.prev_pos, p.prev_quat = torch.zeros(2, 3), torch.tensor([[1.0, 0, 0, 0]] * 2)
+    p.still_steps = torch.zeros(2, dtype=torch.long)
+    p.prev_phase = torch.full((2,), -1, dtype=torch.long)
+    p.phase = torch.tensor([INSERT, GRASP])
+    quat = torch.tensor([[1.0, 0, 0, 0]] * 2)
+    pos = torch.zeros(2, 3)
+    assert p._stall(pos, quat).tolist() == [False, False]  # the phase's first step
+    assert p._stall(pos + 0.0002, quat).tolist() == [True, False]  # 0.35 mm this step; Grasp has no limit
+    assert p._stall(pos + 0.0004, quat).tolist() == [True, False]  # step to step: slow drift stays still
+    assert not p.stalled.any()
+    assert p._stall(pos + 0.0006, quat).tolist() == [True, False] and p.stalled.tolist() == [True, False]  # 3 still
+    assert p._stall(pos + 0.0016, quat).tolist() == [False, False]  # 1.7 mm this step: progress
+    assert p.still_steps.tolist() == [0, 0] and not p.stalled.any()
+    turned = torch.tensor([[0.99995, 0.0, 0.0, 0.0075]] * 2)  # about 0.86 deg this step: within 1 deg
+    assert p._stall(pos + 0.0016, turned / turned.norm(dim=-1, keepdim=True)).tolist()[0] is True
+    p.phase = torch.tensor([SCREW, GRASP])
+    assert p._stall(pos + 0.0016, quat).tolist() == [False, False]  # a new phase starts a new run

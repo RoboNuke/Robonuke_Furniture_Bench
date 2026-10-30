@@ -160,6 +160,10 @@ on in the episode metrics (the eval's `summary.yaml`).
 | `phase_release_width` | 0.05 | m: the fingers count as open (let go of the top, or of the leg) wider than this |
 | `phase_hole_xz` / `phase_tilt_deg` | 0.013 / 16 | the leg is in its hole within this of the hole's axis and this tilt from the seat axis (`failures.py`'s) |
 | `phase_hold_steps` | 10 | steps the released leg must stay in its hole to complete Insert |
+| `stall_steps_insert` | 0 | no-progress reset: end the episode as a failure once leg 4 has moved at most `stall_pos_mm` and turned at most `stall_rot_deg` per step, step to step, for this many consecutive Insert steps (0: off). Published as `eval_state` `phase/still`, `phase/still_steps`, `phase/stalled` and the episode metric `phase/stalled` |
+| `stall_steps_screw` | 0 | the same for Screw |
+| `stall_pos_mm` | 0.5 | mm the leg must move since the last step for the step to count as progress |
+| `stall_rot_deg` | 1.0 | deg the leg must turn since the last step for the step to count as progress |
 | `phase_force_scale` | 50 | N, display only: the overlay's force bar is full at this |
 
 ### Checking the FB interface against a demo
