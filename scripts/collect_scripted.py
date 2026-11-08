@@ -66,9 +66,6 @@ parser.add_argument("--insert_lift", type=float, default=0.0, help="m to raise t
 parser.add_argument("--upright_speed", type=float, default=None, help="servo: deg/s cap on standing the grasped leg up in the air (default: --rot_speed)")
 parser.add_argument("--screw_upright", action="store_true", help="servo: while screwing, also servo the leg upright and onto the hole axis (default: only turn and press)")
 parser.add_argument("--insert_yaw", type=float, default=15.0, help="servo: deg counter-clockwise (seen from above) the leg is turned from its stood-up yaw before it is carried over the hole and lowered (0 = as grasped)")
-parser.add_argument("--upright_over_hole", action="store_true",
-                    help="servo: stand the lifted leg up while carrying it over the hole (default: in place, above where it "
-                    "was picked, where with --ik_jacobian tcp the wrist runs into its joint limits)")
 parser.add_argument("--release_dz", type=float, default=0.05, help="servo: m the open hand rises straight up after letting go of the leg, before the regrasp")
 parser.add_argument("--insert_floor", type=float, default=0.003, help="servo: m above the seat the leg is never lowered below")
 parser.add_argument("--insert_stop", type=float, default=0.0005, help="servo: the leg counts as stopped when it dropped less than this (m) over 3 steps")
@@ -121,13 +118,9 @@ parser.add_argument(
 )
 parser.add_argument(
     "--gripper_mode", choices=["effort", "position"], default=None,
-    help="the gripper (default: the task's, ResiP's effort mode). position = the port's earlier gripper, what "
-    "pivot_vary_dart* were collected with: a 600 N/m drive capped at 13 N, 0.2 m/s, the robot's self-collisions on",
-)
-parser.add_argument(
-    "--ik_jacobian", choices=["tcp", "isaaclab"], default=None,
-    help="--sim resip's IK Jacobian (default: the task's, tcp). isaaclab = Isaac Lab's own term, what the datasets "
-    "before 171353b (pivot_vary_dart_v2 and earlier) were collected with",
+    help="the gripper (default: the task's, position: a 600 N/m drive capped at 13 N, 0.2 m/s, the robot's "
+    "self-collisions on, what every successful dataset was collected with). effort = ResiP's +-13 N gripper at their "
+    "finger speed (0.057 m/s), self-collisions off",
 )
 parser.add_argument(
     "--part_assets", default=None,
@@ -374,11 +367,11 @@ def main() -> None:
     if args.gripper_mode == "position":  # the port's earlier gripper, with the self-collisions it had
         cfg.furniture.gripper_mode, cfg.furniture.robot_self_collisions = "position", True
         cfg.furniture.gripper_velocity_limit = 0.2
-    elif args.gripper_mode == "effort":
+    elif args.gripper_mode == "effort":  # ResiP's own gripper, at their fingers' speed
+        from furniture_lab.tasks.assembly.assembly_env_cfg import RESIP_FINGER_SPEED
+
         cfg.furniture.gripper_mode, cfg.furniture.robot_self_collisions = "effort", False
-    if args.ik_jacobian is not None:
-        cfg.furniture.ik_jacobian = args.ik_jacobian
-    cfg.apply_ik()
+        cfg.furniture.gripper_velocity_limit = RESIP_FINGER_SPEED
     if args.part_friction is not None:
         cfg.furniture.part_friction = args.part_friction
     if args.table_friction is not None:
@@ -391,7 +384,7 @@ def main() -> None:
     cfg.apply_gripper()
     f = cfg.furniture
     print(f"[collect] env: randomness {f.randomness}, parts {f.part_assets} ({f.mesh_frame}), masses {f.part_masses}, "
-          f"gripper {f.gripper_mode} ({f.gripper_effort} N, speed {f.gripper_velocity_limit}, self-collisions {f.robot_self_collisions}), ik_jacobian {f.ik_jacobian}, friction parts {f.part_friction} "
+          f"gripper {f.gripper_mode} ({f.gripper_effort} N, speed {f.gripper_velocity_limit}, self-collisions {f.robot_self_collisions}), friction parts {f.part_friction} "
           f"obstacles {f.obstacle_friction} robot {f.robot_friction}, ee_vel_point {f.ee_vel_point}, obstacle_offset {f.obstacle_offset}", flush=True)
     if args.record:
         cfg.scene.clone_in_fabric = False
@@ -448,7 +441,6 @@ def main() -> None:
                 pivot_dz=args.pivot_dz,
                 pivot_step_deg=None if args.pivot_speed is None else args.pivot_speed * env.step_dt,
                 insert_yaw_deg=args.insert_yaw,
-                upright_over_hole=args.upright_over_hole,
                 upright_step_deg=None if args.upright_speed is None else args.upright_speed * env.step_dt,
                 wind_step_deg=args.wind_speed * env.step_dt,
                 gain=args.servo_gain if args.servo_gain is not None else (1.0 if args.sim == "resip" else 5.0),

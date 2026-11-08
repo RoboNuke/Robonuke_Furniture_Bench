@@ -266,24 +266,20 @@ def test_free_hand_commands_stay_within_the_per_step_limits():
             T.OSC_FRACTION = osc
 
 
-def test_upright_over_hole_stands_the_leg_up_on_the_way_to_the_hole():
-    """upright_over_hole: the lifted leg is stood up while it is carried toward the hole (the
-    default stands it up in place); both still assemble in the ideal world."""
-    for over in (False, True):
-        w = IdealWorld()
-        pol = sv.ServoOneLegPolicy(seed=0, upright_over_hole=over)
-        start = end = None
-        for _ in range(1500):
-            a = pol.act(w.state())
-            if a.done:
-                break
-            if pol.phase == "leg_upright":
-                d = float(np.linalg.norm(w.parts["square_table_leg4"][:2, 3] - w.seat[:2]))
-                start = d if start is None else start
-                end = d
-            w.step(a)
-        assert a.done and pol.assembled(w.state()), (over, pol.phase)
-        if over:
-            assert start > 0.1 and end < 0.02, (start, end)  # carried to over the hole while it turned
-        else:
-            assert abs(end - start) < 0.005, (start, end)  # turned in place
+def test_the_leg_is_stood_up_on_the_way_to_the_hole():
+    """leg_upright stands the lifted leg up while it is carried toward the hole (never in place, where the wrist
+    runs into its joint limits), and the expert still assembles in the ideal world."""
+    w = IdealWorld()
+    pol = sv.ServoOneLegPolicy(seed=0)
+    start = end = None
+    for _ in range(1500):
+        a = pol.act(w.state())
+        if a.done:
+            break
+        if pol.phase == "leg_upright":
+            d = float(np.linalg.norm(w.parts["square_table_leg4"][:2, 3] - w.seat[:2]))
+            start = d if start is None else start
+            end = d
+        w.step(a)
+    assert a.done and pol.assembled(w.state()), pol.phase
+    assert start > 0.1 and end < 0.02, (start, end)  # carried to over the hole while it turned

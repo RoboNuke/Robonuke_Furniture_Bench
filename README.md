@@ -194,16 +194,15 @@ steps at most); only then does the screw turn begin. `--pivot_dz` raises that sa
 hole axis (its centre above the hole point, ramped in over 5 steps), so the hand presses less. Everything it uses (the leg's and the top's poses) is in the policy
 observation. `--screw_press` defaults to 0.002 (the press sweep's best failure mix).
 
-### Standing the leg up over the hole (`--upright_over_hole`)
+### Standing the leg up over the hole
 
-By default the lifted leg is stood up in place, above where it was picked (`leg_upright`), then
-carried over the hole and yawed to its placement yaw (`leg_over`, `--insert_yaw`). There, near the
-robot and low, the hand's tilt sweeps its axis past the forearm's (joints 5 and 7 nearly coaxial,
-joint 6 ~ 180 deg) and the IK spins joints 5 and 7 into their limits. `--upright_over_hole`
-stands it up while carrying it to over the hole instead, the placement yaw turned in on the same
-way (one goal, fixed when `leg_upright` starts), so the wrist passes the forearm's axis farther out.
-With the TCP Jacobian (`--ik_jacobian tcp`, position gripper, 64 attempts, the same seed and
-starts): 53/64 succeed and 6 come within 1 deg of a q5 / q6 limit, against 16/64 and 47 without it.
+The lifted leg is stood up while it is carried to over the hole (`leg_upright`), the placement yaw
+(`--insert_yaw`) turned in on the same way: one goal, fixed when `leg_upright` starts. Until
+2026-11-01 the expert stood it up in place, above where it was picked, and only then carried it over;
+there, near the robot and low, the hand's tilt swept its axis past the forearm's (joints 5 and 7
+nearly coaxial, joint 6 ~ 180 deg) and the IK spun joints 5 and 7 into their limits. With the TCP
+Jacobian (position gripper, 64 attempts, the same seed and starts) the current way assembled 53/64,
+6 coming within 1 deg of a q5 / q6 limit; standing up in place assembled 16/64, 47 near a limit.
 
 ### Collecting in parallel (`--num_envs`)
 
@@ -365,8 +364,11 @@ centre-of-mass velocity, `randomness: port`, the real masses, the position gripp
   * `port`: this port's earlier reset -- every part uniform ±1.5 cm / ±15° yaw, redrawn while two
     footprints overlap (no margin, no limits, 20 tries), the obstacles by `furniture.obstacle_offset`
     (used by `port` only), the arm at its reset joints.
-* **The gripper.** `furniture.gripper_mode` `effort` (what `apply_resip` sets since 2026-10-20) is
-  ResiP's: the finger drive has no gains, each finger gets a constant +13 N while the command is open
+* **The gripper.** `furniture.gripper_mode` `position` is what `apply_resip` sets (the default again since
+  2026-11-01; effort was the default 2026-10-20 to 2026-11-01): every successful dataset and run used it,
+  a 600 N/m drive capped at 13 N on the open / close target, a 0.2 m/s cap, the robot's self-collisions
+  on -- it closes and opens in about one step. `effort` (opt-in: with `robot_self_collisions` false and
+  `gripper_velocity_limit` 0.057, or `collect_scripted.py --gripper_mode effort`) is ResiP's: the finger drive has no gains, each finger gets a constant +13 N while the command is open
   and -13 N while closed (`gripper_effort`; `mdp/gripper.py`'s binary effort term), the finger travel
   is capped at 0.0325 m (65 mm open). Their fingers move 11.3 mm of separation per step, opening and
   closing (their demos); here the same comes from `gripper_velocity_limit` 0.057 m/s
@@ -374,8 +376,7 @@ centre-of-mass velocity, `randomness: port`, the real masses, the position gripp
   step) and nothing up to 12 slows it, so `gripper_joint_friction` is 8 (it resists the leg pushing a
   closed finger open). Effort mode needs `furniture.robot_self_collisions` false: Isaac Lab's Franka
   USD has finger 2 touch another robot link past ~24.7 mm, which a 13 N effort cannot push through
-  (it opened to 57 mm). `position` is the port's earlier gripper: a 600 N/m drive capped at 13 N on
-  the open / close target, a 0.2 m/s cap -- it closed and opened in about one step.
+  (it opened to 57 mm).
 * **The part meshes.** `furniture.part_assets` (default `furniturebench`) picks the part USDs. `uwlab`: the
   repo's UWLab files, each part split into convex hulls (the top's plate and walls, the leg's body)
   and SDF meshes at PhysX's default resolution (256) on the hole blocks and the bolt.
@@ -393,13 +394,13 @@ centre-of-mass velocity, `randomness: port`, the real masses, the position gripp
   volume (read back from their sim), not the `sim_config` comments' 151 g / 23.1 g (`PartSpec.mass`,
   the real parts). The inertia is the USD's, scaled to the mass (`recompute_inertia`); their parts
   carry no damping, the port's the USD's.
-* **The IK Jacobian.** `furniture.ik_jacobian` (ResiP tasks' differential-IK arm term, `dik_arm_cfg`):
-  `tcp` (default, 171353b) rotates the TCP lever into the root frame (`mdp/tcp_ik.py`, the true TCP
-  Jacobian); `isaaclab` is Isaac Lab's own term, which puts the hand-frame lever on the root-frame
-  Jacobian (the TCP taken ~10 cm above the hand while it points down). Every dataset before 171353b
-  used `isaaclab`. With `tcp` the scripted expert's wrist runs into its q5 / q6 limits in 76% of
-  attempts (26% success); with `isaaclab` 19% (75%). `collect_scripted.py --ik_jacobian` sets it;
-  `--upright_over_hole` keeps the wrist clear with `tcp` (above).
+* **The IK Jacobian.** The ResiP tasks' differential-IK arm term (`dik_arm_cfg`) is always
+  `mdp/tcp_ik.py`'s `TcpDifferentialIKAction`: Isaac Lab's term with the TCP lever rotated into the
+  root frame, the true TCP Jacobian. Isaac Lab's own term puts the hand-frame lever on the root-frame
+  Jacobian (with the hand pointing down, the TCP taken ~10 cm above the hand), so every roll or pitch
+  command swings the TCP sideways ~0.207 m x angle before the loop pulls it back. It was a
+  `furniture.ik_jacobian: isaaclab` option until 2026-11-01 and has been removed; every dataset
+  collected before then (`physic_aligned*`) used it.
 
 ### Hybrid force/position control on joint torques
 

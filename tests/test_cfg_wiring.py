@@ -390,7 +390,8 @@ def test_success_mode_defaults_to_soft(cfg_module):
 
 def test_resip_sim_cfgs(cfg_module):
     """ResiP's FurnitureRLSimEnv: 10 Hz, differential IK into joint PD 1000/200, FurnitureSim
-    friction, a 13 N gripper with hysteresis, 70 s episodes -- on every interface."""
+    friction, a 13 N gripper with hysteresis, 70 s episodes -- on every interface -- with the gripper and the IK
+    Jacobian every successful dataset used (position, 0.2 m/s, self-collisions on; Isaac Lab's Jacobian)."""
     for name, absolute in (("OneLegResiPEnvCfg", False), ("OneLegFBResiPEnvCfg", False), ("OneLegFBAbsResiPEnvCfg", True)):
         cfg = getattr(cfg_module, name)()
         assert cfg.decimation == 12 and abs(cfg.sim.dt - 1 / 120) < 1e-12 and cfg.episode_length_s == 70.0
@@ -399,21 +400,30 @@ def test_resip_sim_cfgs(cfg_module):
         f = cfg.furniture
         assert (f.part_friction, f.table_friction, f.gripper_effort_limit, f.gripper_margin) == (0.15, 0.10, 13.0, 0.019)
         assert f.obstacle_offset == 0.02 and cfg.events.reset_obstacles is not None
-        assert f.gripper_velocity_limit == 0.057 and cfg.scene.robot.actuators["panda_hand"].velocity_limit_sim == 0.057
-        # ResiP's gripper: effort mode, +-13 N per finger, travel 0.0325, their finger speed, self-collisions off
+        assert f.gripper_velocity_limit == 0.2 and cfg.scene.robot.actuators["panda_hand"].velocity_limit_sim == 0.2
+        # the position gripper: a 600 N/m drive capped at 13 N, 0.2 m/s, the robot's self-collisions on
         hand = cfg.scene.robot.actuators["panda_hand"]
-        assert f.gripper_mode == "effort" and (hand.stiffness, hand.damping) == (0.0, 0.0)
-        assert (hand.friction, hand.dynamic_friction) == (8.0, 8.0) and f.gripper_effort == 13.0
-        assert f.robot_self_collisions is False
+        assert f.gripper_mode == "position" and (hand.stiffness, hand.damping) == (600.0, 40.0)
+        assert (hand.friction, hand.dynamic_friction) == (None, None)
+        assert all(getattr(hand, name) == 13.0 for name in ("effort_limit", "effort_limit_sim") if hasattr(hand, name))
+        assert f.robot_self_collisions is True
+        grip = cfg.actions.fb.gripper if hasattr(cfg.actions, "fb") else cfg.actions.gripper
+        assert type(grip).__name__ == "BinaryJointPositionActionCfg"  # the task's binary position term
+        assert cfg.events.finger_limits is None
+        arm = cfg.actions.fb.arm if hasattr(cfg.actions, "fb") else cfg.actions.arm
+        assert arm.controller.use_relative_mode is (not absolute) and arm.controller.ik_method == "pinv"
+        assert arm.class_type.__name__ == "TcpDifferentialIKAction"  # the TCP lever in the root frame, the only IK
+        # ResiP's own gripper, opt-in: effort mode, +-13 N per finger, travel 0.0325, their finger speed, self-collisions off
+        f.gripper_mode, f.robot_self_collisions, f.gripper_velocity_limit = "effort", False, cfg_module.RESIP_FINGER_SPEED
+        cfg.apply_gripper()
+        assert (hand.stiffness, hand.damping) == (0.0, 0.0) and (hand.friction, hand.dynamic_friction) == (8.0, 8.0)
+        assert hand.velocity_limit_sim == 0.057
         grip = cfg.actions.fb.gripper if hasattr(cfg.actions, "fb") else cfg.actions.gripper
         assert grip.class_type.__name__ == "BinaryJointEffortAction"
         assert grip.open_command_expr == {"panda_finger_joint.*": 13.0} and grip.close_command_expr == {"panda_finger_joint.*": -13.0}
         lim = cfg.events.finger_limits
         assert lim.mode == "startup" and lim.params["upper"] == 0.0325
         assert lim.params["asset_cfg"]._args == ("robot",) and lim.params["asset_cfg"].joint_names == "panda_finger_joint.*"
-        arm = cfg.actions.fb.arm if hasattr(cfg.actions, "fb") else cfg.actions.arm
-        assert arm.controller.use_relative_mode is (not absolute) and arm.controller.ik_method == "pinv"
-        assert arm.class_type.__name__ == "TcpDifferentialIKAction"  # the TCP Jacobian fixed
         assert arm.body_offset.pos == cfg_module.EE_OFFSET
     # the ResiP FBAbs observation: the parts in the robot-base frame, then the front obstacle's x, y (63)
     resip = cfg_module.OneLegFBAbsResiPEnvCfg()
@@ -428,28 +438,16 @@ def test_resip_sim_cfgs(cfg_module):
     assert port.decimation == 6 and port.scene.robot.actuators["panda_shoulder"].stiffness == 0.0
 
 
-def test_ik_jacobian_switches_the_arm_term(cfg_module):
-    """furniture.ik_jacobian: tcp (default) = TcpDifferentialIKAction, isaaclab = Isaac Lab's own term,
-    on every ResiP interface; anything else fails; the OSC cfgs are left alone."""
-    for name in ("OneLegResiPEnvCfg", "OneLegFBResiPEnvCfg", "OneLegFBAbsResiPEnvCfg"):
+def test_every_resip_interface_uses_the_tcp_jacobian_and_the_osc_cfgs_have_none(cfg_module):
+    """The ResiP tasks' differential-IK arm term is always TcpDifferentialIKAction (the TCP lever rotated into the
+    root frame); there is no other IK to pick. The port's OSC cfgs have no IK term."""
+    for name in ("OneLegResiPEnvCfg", "OneLegFBResiPEnvCfg", "OneLegFBAbsResiPEnvCfg", "OneLegFBRelResiPEnvCfg", "OneLegFBDeltaResiPEnvCfg"):
         cfg = getattr(cfg_module, name)()
         arm = cfg.actions.fb.arm if hasattr(cfg.actions, "fb") else cfg.actions.arm
-        assert cfg.furniture.ik_jacobian == "tcp" and arm.class_type.__name__ == "TcpDifferentialIKAction"
-        cfg.furniture.ik_jacobian = "isaaclab"
-        cfg.apply_ik()
-        assert arm.class_type.__name__ == "DifferentialInverseKinematicsAction"
-        cfg.furniture.ik_jacobian = "tcp"
-        cfg.apply_ik()
-        assert arm.class_type.__name__ == "TcpDifferentialIKAction"
-        cfg.furniture.ik_jacobian = "TCP"
-        with pytest.raises(ValueError, match="ik_jacobian"):
-            cfg.apply_ik()
+        assert arm.class_type.__name__ == "TcpDifferentialIKAction", name
+        assert not hasattr(cfg.furniture, "ik_jacobian") and not hasattr(cfg, "apply_ik")
     port = cfg_module.OneLegFBAbsEnvCfg()
-    arm = port.actions.fb.arm
-    before = getattr(arm, "class_type", None)
-    port.furniture.ik_jacobian = "isaaclab"
-    port.apply_ik()
-    assert port.actions.fb.arm is arm and getattr(arm, "class_type", None) is before
+    assert getattr(getattr(port.actions.fb.arm, "class_type", None), "__name__", None) != "TcpDifferentialIKAction"
 
 
 def test_the_hybrid_cfg_is_resip_with_the_arm_on_joint_torques(cfg_module):
@@ -460,13 +458,13 @@ def test_the_hybrid_cfg_is_resip_with_the_arm_on_joint_torques(cfg_module):
     for group in ("panda_shoulder", "panda_forearm"):
         assert cfg.scene.robot.actuators[group].stiffness == 0.0
         assert cfg.scene.robot.actuators[group].damping == 0.0
-    # the fingers keep ResiP's effort-mode gripper (no drive gains, +-13 N), not the arm's torque law
-    assert cfg.furniture.gripper_mode == "effort" and cfg.scene.robot.actuators["panda_hand"].friction == 8.0
+    # the fingers keep the ResiP tasks' position gripper (600 N/m capped at 13 N), not the arm's torque law
+    assert cfg.furniture.gripper_mode == "position" and cfg.scene.robot.actuators["panda_hand"].stiffness == 600.0
     assert not hasattr(cfg.actions, "arm") and not hasattr(cfg.actions, "fb")
     term = cfg.actions.hybrid
     assert term.class_type.__name__ == "HybridTorqueAbsAction"
     assert term.body_name == "panda_hand" and term.joint_names == ["panda_joint.*"]
-    assert term.gripper is not None and term.gripper.class_type.__name__ == "BinaryJointEffortAction"
+    assert term.gripper is not None and type(term.gripper).__name__ == "BinaryJointPositionActionCfg"
     assert cfg.furniture.gripper_margin == 0.019
     # the plain ResiP cfg is untouched by the hybrid one
     assert cfg_module.OneLegFBAbsResiPEnvCfg().scene.robot.actuators["panda_shoulder"].stiffness == 1000.0

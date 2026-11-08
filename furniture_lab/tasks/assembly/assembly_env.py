@@ -54,13 +54,12 @@ class AssemblyEnv(ManagerBasedRLEnv):
         #: ResiP's reset kick on the parts (furniture.randomness kick_*), made by its
         #: reset event (mdp.events.resip_reset); None until then
         self.part_kick = None
-        # furniture.*_friction / gripper_* / ik_jacobian / ee_vel_point / part_masses are plain fields a config file can
+        # furniture.*_friction / gripper_* / ee_vel_point / part_masses are plain fields a config file can
         # override after the cfg's __post_init__ ran; push them into the event terms, the
         # actuator and the observation terms here, where the scene has not been built yet
         cfg.apply_assets()
         cfg.apply_friction()
         cfg.apply_gripper()
-        cfg.apply_ik()
         cfg.apply_observations()
         cfg.apply_masses()
         # an unknown furniture.randomness fails here, not at the first reset; every level but

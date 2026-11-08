@@ -194,7 +194,6 @@ class ServoOneLegPolicy:
         pivot_step_deg: float | None = None,
         pivot_dz: float = 0.0,
         insert_yaw_deg: float = 15.0,
-        upright_over_hole: bool = False,
         corner_clearance: float = -0.002,
         hover_dz: float = 0.04,
         q7_margin: float = 0.08,
@@ -285,14 +284,6 @@ class ServoOneLegPolicy:
         #: (deg, counter-clockwise seen from above = +world yaw), a fixed goal for the whole
         #: placement: turns the thread start away from the yaw that cross-threads
         self.insert_yaw = np.radians(insert_yaw_deg)
-        #: stand the lifted leg up while carrying it to over the hole (at the carry height),
-        #: turning in the placement yaw on the way, instead of standing it up in place above
-        #: where it was picked and yawing it over the hole afterwards. In place, the hand's
-        #: tilt sweeps its axis past the forearm's (joints 5 and 7 nearly coaxial, joint 6 ~
-        #: 180 deg) and the IK spins joints 5 and 7 into their limits -- with the TCP Jacobian
-        #: (``furniture.ik_jacobian: tcp``); Isaac Lab's own dragged the hand ~0.2 m toward
-        #: the hole while it turned, which kept the wrist clear
-        self.upright_over_hole = bool(upright_over_hole)
         self._place_R = None
         self.corner_clearance = corner_clearance
         self.assembled_hold_steps = assembled_hold_steps
@@ -475,19 +466,16 @@ class ServoOneLegPolicy:
             if ep < 0.01:
                 self._goto("leg_upright")
         elif self.phase == "leg_upright":
-            # stand it up in the air: axis vertical, bolt down, by the smallest rotation -- in
-            # place, or (upright_over_hole) while carrying it over the hole with the placement
-            # yaw turned in on the way (one goal, fixed when the phase starts)
-            if self.upright_over_hole:
-                if self.phase_steps == 1:
-                    self._place_R = upright_goal(leg_R, self.insert_yaw)
-                tgt, R_up = np.array([seat[0], seat[1], seat[2] + self.carry_dz]), self._place_R
-            else:
-                tgt, R_up = np.array([leg_pos[0], leg_pos[1], seat[2] + self.carry_dz]), upright_goal(leg_R)
+            # stand it up in the air (axis vertical, bolt down) while carrying it to over the hole at
+            # the carry height, the placement yaw turned in on the way: one goal, fixed when the
+            # phase starts. Standing it up in place, above where it was picked (near the robot and
+            # low), swept the hand's axis past the forearm's (joints 5 and 7 nearly coaxial, joint 6
+            # ~180 deg) and the IK spun joints 5 and 7 into their limits (16/64 succeeded vs 53/64)
+            if self.phase_steps == 1:
+                self._place_R = upright_goal(leg_R, self.insert_yaw)
+            tgt, R_up = np.array([seat[0], seat[1], seat[2] + self.carry_dz]), self._place_R
             goal_pos, goal_R, ep, er = self.upright_servo.step(leg_pos, leg_R, tgt, R_up, ee_pos, ee_R)
             if ep < 0.01 and leg_tilt_deg(leg_R) < 3.0:
-                if not self.upright_over_hole:
-                    self._place_R = upright_goal(leg_R, self.insert_yaw)
                 self._goto("leg_over")
         elif self.phase == "leg_over":
             # bolt tip just above the hole: origin at seat + over_dz (default 30 mm; the bolt is 25.4 mm long)

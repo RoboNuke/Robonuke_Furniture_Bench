@@ -258,12 +258,6 @@ class FurnitureCfg:
     #: 13 N effort stalls there (the gripper opens to 57 mm, not 65), so effort mode needs them off
     #: (``apply_resip`` turns them off; ResiP's own Franka opens to 65 mm)
     robot_self_collisions: bool = True
-    #: the ResiP arm controller's Jacobian (``dik_arm_cfg``): "tcp" = the TCP lever rotated into the
-    #: root frame (``mdp.tcp_ik.TcpDifferentialIKAction``, since 171353b on 2026-10-20); "isaaclab" =
-    #: Isaac Lab's own term, which puts the hand-frame lever on the root-frame Jacobian (the TCP taken
-    #: ~10 cm above the hand while it points down). The datasets collected before 171353b used
-    #: "isaaclab"; with "tcp" the scripted expert's wrist runs into its q5/q6 limits (26% vs 75% success)
-    ik_jacobian: str = "tcp"
     #: the FB action terms' gripper hysteresis: the command flips only when the action's sign
     #: changes and its size exceeds this (ResiP / FurnitureRLSimEnv's grasp_margin, 0.019);
     #: 0 = flip on the sign, Isaac Lab's binary term as is
@@ -462,7 +456,6 @@ class AssemblyEnvCfg(ManagerBasedRLEnvCfg):
         self.apply_assets()
         self.apply_friction()
         self.apply_gripper()
-        self.apply_ik()
         self.apply_observations()
         self.apply_masses()
         mdp.randomness(self.furniture)  # an unknown furniture.randomness fails here
@@ -516,21 +509,6 @@ class AssemblyEnvCfg(ManagerBasedRLEnvCfg):
                 term.params["offset"] = EE_OFFSET
             else:
                 term.params.pop("offset", None)
-
-    def apply_ik(self) -> None:
-        """Push ``furniture.ik_jacobian`` into the differential-IK arm term(s) (call again after changing
-        it). A cfg without one (the OSC terms) is left as it is."""
-        from isaaclab.envs.mdp.actions.task_space_actions import DifferentialInverseKinematicsAction
-
-        from .mdp.tcp_ik import TcpDifferentialIKAction
-
-        mode = self.furniture.ik_jacobian
-        if mode not in ("tcp", "isaaclab"):
-            raise ValueError(f"furniture.ik_jacobian must be 'tcp' or 'isaaclab', got {mode!r}")
-        for group in (self.actions, getattr(self.actions, "fb", None)):
-            term = getattr(group, "arm", None) if group is not None else None
-            if isinstance(term, DifferentialInverseKinematicsActionCfg):
-                term.class_type = TcpDifferentialIKAction if mode == "tcp" else DifferentialInverseKinematicsAction
 
     def apply_gripper(self) -> None:
         """Push ``furniture.gripper_*`` into the finger actuator, the gripper action term(s) and the
@@ -770,6 +748,8 @@ RESIP_GRIPPER_SPEED = 0.2
 #: ResiP's fingers' speed (m/s each), measured in their demos: 11.3 mm of finger separation per 0.1 s
 #: step opening and closing (their 13 N effort against their joint friction); effort mode's cap
 RESIP_FINGER_SPEED = 0.057
+#: the position gripper's finger speed cap (m/s per finger), apply_resip's default
+POSITION_FINGER_SPEED = 0.2
 #: the friction of every shape ResiP's sim sets none on -- the obstacles and the whole Franka,
 #: fingers included: Isaac Gym's asset default (their URDFs loaded and read back, 1.0 on every
 #: shape). Not applied by ``apply_resip``; ``furniture.obstacle_friction`` / ``robot_friction`` opt in
@@ -809,15 +789,15 @@ def apply_resip(cfg) -> None:
         cfg.scene.robot.actuators[group].damping = RESIP_ARM_DAMPING
     f = cfg.furniture
     f.part_friction, f.table_friction = 0.15, 0.10
-    # ResiP's own gripper: effort mode, +-13 N per finger, the finger travel capped at 0.0325
-    # (mdp/gripper.py), moving at their fingers' measured speed (RESIP_FINGER_SPEED); the robot's
-    # self-collisions off (see FurnitureCfg.robot_self_collisions). Datasets before 2026-10-20 were
-    # recorded with gripper_mode "position": a 600 N/m drive capped at 13 N (the spring and damping
-    # below) and a 0.2 m/s cap, which closed and opened in about one step
-    f.gripper_mode, f.gripper_effort, f.gripper_joint_friction = "effort", 13.0, 8.0
-    f.robot_self_collisions = False
+    # the gripper every successful dataset and run used: gripper_mode "position", a 600 N/m drive capped at
+    # 13 N and a 0.2 m/s cap, which closes and opens in about one step, with the robot's self-collisions on.
+    # ResiP's own gripper is opt-in: gripper_mode "effort" (+-13 N per finger, the finger travel capped at
+    # 0.0325, mdp/gripper.py), robot_self_collisions false (see FurnitureCfg.robot_self_collisions) and
+    # gripper_velocity_limit RESIP_FINGER_SPEED, their fingers' measured speed
+    f.gripper_mode, f.gripper_effort, f.gripper_joint_friction = "position", 13.0, 8.0
+    f.robot_self_collisions = True
     f.gripper_stiffness, f.gripper_damping, f.gripper_effort_limit = 600.0, 40.0, 13.0
-    f.gripper_velocity_limit = RESIP_FINGER_SPEED
+    f.gripper_velocity_limit = POSITION_FINGER_SPEED
     f.gripper_margin = 0.019
     f.obstacle_offset = RESIP_OBSTACLE_OFFSET
     cfg.apply_friction()
@@ -830,7 +810,6 @@ def apply_resip(cfg) -> None:
         fb.arm = dik_arm_cfg(absolute=issubclass(fb.class_type, mdp.FurnitureBenchAbsAction))
     else:
         cfg.actions.arm = dik_arm_cfg(absolute=False)
-    cfg.apply_ik()
 
 
 @configclass

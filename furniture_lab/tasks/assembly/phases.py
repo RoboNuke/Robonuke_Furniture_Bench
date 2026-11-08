@@ -64,7 +64,8 @@ if TYPE_CHECKING:
 
 __all__ = [
     "PHASES", "ENDS", "LEG_TIP", "advance", "end_code", "corner_error", "holds_top", "corner_done", "leg_in_hole",
-    "leg_tip_off_axis", "OneLegPhases", "phases_from_states", "leg_measures_from_states",
+    "leg_tip_off_axis", "OneLegPhases", "phases_from_states", "leg_measures_from_states", "phase_checks", "phase_step",
+    "decode_states", "observed_states",
 ]
 
 #: phase ids 0-3, then the three ends 4-6
@@ -158,6 +159,30 @@ def ori_error_deg(rel_quat: torch.Tensor) -> torch.Tensor:
     return torch.rad2deg(torch.acos(rotation_diag(rel_quat).min(dim=-1).values.clamp(-1.0, 1.0)))
 
 
+def observed_states(env) -> torch.Tensor:
+    """The ``-FBAbs-ResiP`` observation columns the phase checks read, from the env's own observation terms (``ee_pos``,
+    ``gripper_width``, ``parts_poses_b_rot6d``: the values the policy observes), as a ``(N, 63)`` observation (the
+    columns it does not read are zero): the tracker labels what a recording of the observation would be labelled."""
+    from .mdp.observations import ee_pos, gripper_width, parts_poses_b_rot6d
+
+    from isaaclab.managers import SceneEntityCfg
+
+    robot_hand = SceneEntityCfg("robot", body_names="panda_hand")
+    robot_hand.resolve(env.scene)
+    fingers = SceneEntityCfg("robot", joint_names="panda_finger_joint.*")
+    fingers.resolve(env.scene)
+    states = torch.zeros((env.num_envs, 63), device=env.device)
+    states[:, 0:3] = ee_pos(env, robot_hand)
+    states[:, 15:16] = gripper_width(env, fingers)
+    states[:, 16:61] = parts_poses_b_rot6d(env)
+    return states
+
+
+def decode_states(states: torch.Tensor, mesh_frame: str):
+    """:func:`_decode_states` (the observation columns the phase checks read, decoded)."""
+    return _decode_states(states, mesh_frame)
+
+
 def _decode_states(states: torch.Tensor, mesh_frame: str):
     """``-FBAbs-ResiP`` observations ``(T, 63)`` (see :func:`phases_from_states`) -> the TCP, the finger width, the
     top's and leg 4's positions, the leg's pose in the top's frame (USD ``mesh_frame``, as the tracker measures it)
@@ -211,6 +236,35 @@ def leg_measures_from_states(states: torch.Tensor, *, mesh_frame: str) -> Dict[s
             "phase/height_mm": height * 1000}
 
 
+def phase_checks(tcp, width, top_p, leg_p, rel_pos, rel_quat, frames, rest_z, f) -> Dict[str, torch.Tensor]:
+    """One step's measurements and checks, shared by the env tracker and the offline labelling (one definition):
+    ``tcp``, ``width``, the top's and the leg's positions and the leg's pose in the top's frame as
+    :func:`decode_states` gives them from an ``-FBAbs-ResiP`` observation, ``rest_z`` the leg's height at the episode's
+    first observation, ``f`` the ``furniture.phase_*`` thresholds (any object with those attributes)."""
+    hole, axis, ref = frames
+    xz, height, tilt, angle = leg_in_hole(rel_pos, rel_quat, hole, axis, ref)
+    return {
+        "holds": holds_top(width, tcp, top_p, f.phase_top_grip_width, f.phase_top_grip_dist, f.phase_top_grip_height),
+        "released": width > f.phase_release_width,
+        "held": (tcp - leg_p).norm(dim=-1),
+        "lift": leg_p[..., 2] - rest_z,
+        "in_hole": (xz <= f.phase_hole_xz) & (tilt <= f.phase_tilt_deg),
+        "xz": xz, "height": height, "tilt": tilt, "angle": angle,
+    }
+
+
+def phase_step(phase, top_held, hold, checks, f):
+    """One step of the phase state machine, shared by the env tracker and the offline labelling: ``(phase, top_held,
+    hold, holding)`` after this step's ``checks`` (:func:`phase_checks`) -- the top held while in Corner, the in-hole
+    hold count in Insert, then :func:`advance`; ``holding`` = held the top this step, in Corner."""
+    holding = (phase == CORNER) & checks["holds"]
+    top_held = top_held | holding
+    hold = torch.where((phase == INSERT) & checks["released"] & checks["in_hole"], hold + 1, torch.zeros_like(hold))
+    phase = advance(phase, corner_done(top_held, checks["released"]),
+                    (checks["held"] <= f.phase_held_dist) & (checks["lift"] >= f.phase_lift), hold >= int(f.phase_hold_steps))
+    return phase, top_held, hold, holding
+
+
 def phases_from_states(
     states: torch.Tensor,
     *,
@@ -231,25 +285,22 @@ def phases_from_states(
     observation holds -- the TCP (``ee_pos``), the finger width, the top's and leg 4's poses (OBJ frame, carried back
     to the USD ``mesh_frame`` the tracker measures in). The thresholds are ``furniture.phase_*``'s. Returns ``(T,)``
     long: 0-3 the phase each observation is in (never an end code)."""
+    from types import SimpleNamespace
+
     states = states.to(torch.float32)
     dev = states.device
-    tcp, width, top_p, leg_p, rel_pos, rel_quat, (hole, axis, ref) = _decode_states(states, mesh_frame)
-    xz, _, tilt, _ = leg_in_hole(rel_pos, rel_quat, hole, axis, ref)
-    lifted = leg_p[:, 2] - leg_p[0, 2]
-    held = (tcp - leg_p).norm(dim=-1)
-    holds = holds_top(width, tcp, top_p, top_grip_width, top_grip_dist, top_grip_height)
-    released = width > release_width
-    in_hole = (xz <= hole_xz) & (tilt <= tilt_deg)
+    f = SimpleNamespace(phase_top_grip_width=top_grip_width, phase_top_grip_dist=top_grip_dist, phase_top_grip_height=top_grip_height,
+                        phase_lift=lift, phase_held_dist=held_dist, phase_release_width=release_width, phase_hole_xz=hole_xz,
+                        phase_tilt_deg=tilt_deg, phase_hold_steps=hold_steps)
+    tcp, width, top_p, leg_p, rel_pos, rel_quat, frames = _decode_states(states, mesh_frame)
+    checks = phase_checks(tcp, width, top_p, leg_p, rel_pos, rel_quat, frames, leg_p[0, 2], f)
 
     out = torch.zeros(states.shape[0], dtype=torch.long, device=dev)
     phase = torch.zeros(1, dtype=torch.long, device=dev)
     top_held = torch.zeros(1, dtype=torch.bool, device=dev)
     hold = torch.zeros(1, dtype=torch.long, device=dev)
     for t in range(states.shape[0]):
-        top_held = top_held | ((phase == CORNER) & holds[t])
-        hold = torch.where((phase == INSERT) & released[t] & in_hole[t], hold + 1, torch.zeros_like(hold))
-        phase = advance(phase, corner_done(top_held, released[t : t + 1]),
-                        (held[t : t + 1] <= held_dist) & (lifted[t : t + 1] >= lift), hold >= hold_steps)
+        phase, top_held, hold, _ = phase_step(phase, top_held, hold, {k: v[t : t + 1] for k, v in checks.items()}, f)
         out[t] = phase
     return out
 
@@ -356,46 +407,30 @@ class OneLegPhases:
 
     def update(self) -> None:
         """One step: measure, advance, publish. Call after the terminations, before the resets."""
-        from isaaclab.utils.math import combine_frame_transforms, subtract_frame_transforms
+        from isaaclab.utils.math import subtract_frame_transforms
 
-        from ..furniture.assembly import relative_pose
-        from .mdp.state import EE_OFFSET, parts_pose_b, parts_pose_w, tracker
+        from .mdp.state import parts_pose_w, tracker
 
         env, f = self.env, self.cfg
         robot = env.scene["robot"]
         root_pos, root_quat = robot.data.root_pos_w, robot.data.root_quat_w
         pos_w, quat_w = parts_pose_w(env)
-        pos_b, _ = parts_pose_b(env)
-        top_b, leg_b = pos_b[:, self.top], pos_b[:, self.leg]
+        # the labels come from what the policy observes (the -FBAbs-ResiP observation's terms), decoded and checked by the
+        # same functions the offline labelling of recorded observations uses (decode_states, phase_checks, phase_step)
+        tcp_b, width, top_b, leg_b, rel_pos, rel_quat, frames = decode_states(observed_states(env), f.mesh_frame)
         if bool(self.need_rest.any()):
             self.rest_z = torch.where(self.need_rest, leg_b[:, 2], self.rest_z)
             self.need_rest[:] = False
-        off = torch.tensor(EE_OFFSET, device=env.device, dtype=root_pos.dtype).expand(env.num_envs, -1)
-        tcp_w, tcp_q = combine_frame_transforms(robot.data.body_pos_w[:, self.hand], robot.data.body_quat_w[:, self.hand], off)
-        tcp_b, _ = subtract_frame_transforms(root_pos, root_quat, tcp_w, tcp_q)
-        width = robot.data.joint_pos[:, self.fingers].sum(dim=-1)
         front_b, _ = subtract_frame_transforms(root_pos, root_quat, env.scene["obstacle_front"].data.root_pos_w)
         left_b, _ = subtract_frame_transforms(root_pos, root_quat, env.scene["obstacle_left"].data.root_pos_w)
 
         corner = corner_error(top_b[:, :2], front_b[:, 0], left_b[:, 1])
-        lift = leg_b[:, 2] - self.rest_z
-        held = (tcp_b - leg_b).norm(dim=-1)
-        rel_pos, rel_quat = relative_pose(pos_w[:, self.top], quat_w[:, self.top], pos_w[:, self.leg], quat_w[:, self.leg])
-        xz, height, tilt, angle = leg_in_hole(rel_pos, rel_quat, self.hole, self.axis, self.ref)
-        released = width > f.phase_release_width
-        # Corner: the narrowest finger width while holding the top, then letting go of it
-        holding = (self.phase == CORNER) & holds_top(
-            width, tcp_b, top_b, f.phase_top_grip_width, f.phase_top_grip_dist, f.phase_top_grip_height
-        )
-        self.top_held |= holding
-        self.top_grip = torch.where(holding, torch.minimum(self.top_grip, width), self.top_grip)
-        in_hole = (xz <= f.phase_hole_xz) & (tilt <= f.phase_tilt_deg)
-        self.hold = torch.where((self.phase == INSERT) & released & in_hole, self.hold + 1, torch.zeros_like(self.hold))
-
+        checks = phase_checks(tcp_b, width, top_b, leg_b, rel_pos, rel_quat, frames, self.rest_z, f)
+        lift, held, xz, height, tilt, angle = (checks[k] for k in ("lift", "held", "xz", "height", "tilt", "angle"))
         old = self.phase
-        self.phase = advance(
-            old, corner_done(self.top_held, released), (held <= f.phase_held_dist) & (lift >= f.phase_lift), self.hold >= f.phase_hold_steps
-        )
+        self.phase, self.top_held, self.hold, holding = phase_step(old, self.top_held, self.hold, checks, f)
+        # Corner: the narrowest finger width while holding the top, then letting go of it
+        self.top_grip = torch.where(holding, torch.minimum(self.top_grip, width), self.top_grip)
         steps = env.episode_length_buf.to(torch.float32)
         for k in (CORNER, GRASP, INSERT):
             newly = (old <= k) & (self.phase > k)
@@ -438,7 +473,7 @@ class OneLegPhases:
             "phase/lift_mm": lift * 1000,
             "phase/held_mm": held * 1000,
             "phase/hole_mm": xz * 1000,
-            "phase/tip_mm": leg_tip_off_axis(rel_pos, rel_quat, self.hole, self.axis) * 1000,
+            "phase/tip_mm": leg_tip_off_axis(rel_pos, rel_quat, frames[0], frames[1]) * 1000,
             "phase/tilt_deg": tilt,
             "phase/open_mm": width * 1000,
             "phase/hold_steps": self.hold.to(torch.float32),
