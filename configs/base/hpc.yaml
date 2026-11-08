@@ -1,20 +1,34 @@
 # Cluster settings for the HPC launchers (`launchers/*.py`). `configs/base/furniture.yaml`
 # chains onto this file, so every experiment inherits these and overrides only what differs
 # (hpc.time, hpc.mem), with a one-off on the CLI (hpc.time=2-00:00:00). The full field list
-# is the `hpc` section of the package README.
+# is the `hpc` section of the package README; the cluster-side setup (images, cache home,
+# clones) is the package's `hpc/install_hpc.sh`, which prints this block with its paths.
 #
 # WANDB_API_KEY is an environment variable, never a field here. The launcher passes
 # `sbatch --export=ALL`, which carries it from your login shell into the job.
 hpc:
   account: virl-grp
-  # the verified list: no `gpu` (AllowAccounts excludes virl-grp) and no `dgx2` (sm_70, no
-  # cu128 kernels)
-  partitions: dgxh,tiamat,eecs2
+  # every GPU partition virl-grp reaches: dgxh (H100/H200), dgx2 (V100, cu126 image), tiamat
+  # (L40S), eecs2 (optimus, RTX 6000). `gpu` admits eecs only. Training runs on all four;
+  # video (Kit's RTX renderer) only where the driver is the 580 branch Isaac Sim 5.1 supports,
+  # which today is dgx2 alone -- the package's `hpc/verify_partitions.sh` tier e tells.
+  partitions: dgxh,dgx2,tiamat,eecs2
+  # whole-GPU features of those partitions; keeps jobs off the MIG-sliced dgxh-1, where Kit
+  # cannot start (a MIG device has no graphics)
+  constraint: vram80g|vram140g|v100|l40s|rtx6000
 
-  # The existing Isaac image, reused as-is. Nothing is installed into it: the job binds the
-  # package and project clones at their own paths and puts them on PYTHONPATH.
-  sif_image: ~/hpc-share/isaac/ghvic.sif
+  # the `general` env as an image (package hpc/general.def.in), and its torch-cu126 twin the
+  # job switches to on a V100. Nothing is installed into them: the job binds the package and
+  # this project at their own paths and puts them on PYTHONPATH.
+  sif_image: ~/hpc-share/robonuke/images/general-cu128.sif
+  sif_image_sm70: ~/hpc-share/robonuke/images/general-cu126.sif
 
   # Bound as the container HOME: Kit and shader caches land here and run to GBs, so it must
   # be scratch, never a quota'd NFS home.
-  cache_home: ~/hpc-share/isaac_cache_home
+  cache_home: ~/hpc-share/robonuke/cache_home
+
+  # The clones' runs/ wandb/ exp_logs/ are symlinks into ~/hpc-share/robonuke/runs/<repo>/
+  # (the installer makes them: outputs off the quota'd home). The container sees only what
+  # is bound, so the symlinks' target must be bound too, or the first mkdir('runs') fails.
+  binds:
+    - ~/hpc-share/robonuke:~/hpc-share/robonuke
