@@ -13,6 +13,16 @@ it records is what a policy trained here would output: the 8-D FurnitureBench ac
 ``rewards`` (1 at the step the leg counts as assembled), ``skills``, ``success``, ``furniture``
 -- readable by ``furniture_lab.demos.load_demo`` and ``scripts/replay_demo.py``.
 
+For training-time demo loading, per step of the attempt the pkl also carries what the env itself
+produced, so a loader copies the env's data instead of recomputing it: ``infos`` (the env's
+``step()`` infos for this env after the step -- ``eval_state`` with the phase tag ``phase/id``,
+the metric channels, ...; ``infos_initial`` the infos of the settle step before the first
+observation), ``reward_terms`` (every term of the env's ``RewardsCfg``, unweighted, the term
+function's own value -- zero-weight terms included, so a loader applies the training config's
+weights), ``termination_terms`` (every term of the training env's ``TerminationsCfg``, the
+collection env ending none of them) and ``env_terminated`` / ``env_truncated`` (the collection
+env's own flags). Phase tracking (``furniture.track_phases``) is on for that.
+
 A demo ends when the leg is assembled and the hand has lifted clear (success), or at
 upstream's ``scripted_timeout`` of 600 steps (failure). With ``--record`` every attempt is
 filmed: a success keeps its video beside its pkl, a failure keeps it under ``fails/`` only
@@ -51,6 +61,10 @@ from isaaclab.app import AppLauncher  # noqa: E402
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument("--out_dir", type=str, default="fb_demos")
 parser.add_argument("--num_demos", type=int, default=1, help="successes to save (a round's extra successes are kept too)")
+parser.add_argument("--phase_hold_steps", type=int, default=None,
+                    help="furniture.phase_hold_steps for the recorded phase tags and phase rewards: insert counts as "
+                         "passed after the leg stayed in its hole this many steps (default: the env's, 1); set the "
+                         "training run's value")
 parser.add_argument("--num_envs", type=int, default=1,
                     help="attempts run side by side, one expert per env, in synchronous rounds (each round lasts as long as its slowest)")
 parser.add_argument("--seed", type=int, default=0,
@@ -135,6 +149,7 @@ app = AppLauncher(args).app
 
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
+from isaaclab.managers import RewardTermCfg, TerminationTermCfg  # noqa: E402
 from isaaclab.sensors import TiledCameraCfg  # noqa: E402
 from isaaclab.sim.spawners.sensors import PinholeCameraCfg  # noqa: E402
 from isaaclab.utils.math import (  # noqa: E402
@@ -151,7 +166,7 @@ from furniture_lab import scripted_policy as sp  # noqa: E402
 from furniture_lab import servo_policy as sv  # noqa: E402
 from furniture_lab import variation as vr  # noqa: E402
 from furniture_lab.tasks.assembly.assembly_env import AssemblyEnv  # noqa: E402
-from furniture_lab.tasks.assembly.assembly_env_cfg import EE_OFFSET  # noqa: E402
+from furniture_lab.tasks.assembly.assembly_env_cfg import EE_OFFSET, RewardsCfg, TerminationsCfg  # noqa: E402
 from furniture_lab.tasks.assembly.mdp.state import parts_pose_w, tracker  # noqa: E402
 from furniture_lab.tasks.assembly.mdp.terminations import part_out_of_limits  # noqa: E402
 from furniture_lab.tasks.furniture.assembly import pairs_assembled  # noqa: E402
@@ -235,6 +250,34 @@ class AbortKeys:
 
     def new_attempt(self) -> None:
         self.fail = False
+
+
+def manager_terms(cfg, kind) -> dict:
+    """``{name: term cfg}`` of a reward / termination cfg class instance (its ``kind`` fields, in order)."""
+    terms = {name: term for name, term in vars(cfg).items() if isinstance(term, kind)}
+    for name, term in terms.items():
+        if inspect.isclass(term.func):
+            raise NotImplementedError(f"{name}: a class-based term needs its manager's instance; record it from there")
+    return terms
+
+
+def term_values(env, terms: dict) -> dict:
+    """Each term's own value this step, ``{name: (N,) tensor}`` (no weight; the env's own term function)."""
+    return {name: term.func(env, **term.params) for name, term in terms.items()}
+
+
+def env_slice(value, i: int, n: int):
+    """Env ``i``'s part of an infos value: tensors / arrays with a leading ``n`` sliced to row ``i``, dicts and
+    lists recursively, anything else as it is (env-wide values); tensors leave as numpy."""
+    if isinstance(value, dict):
+        return {k: env_slice(v, i, n) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(env_slice(v, i, n) for v in value)
+    if torch.is_tensor(value):
+        value = value.detach().cpu().numpy()
+    if isinstance(value, np.ndarray) and value.ndim >= 1 and value.shape[0] == n:
+        return value[i]
+    return value
 
 
 def assembled_now(env) -> np.ndarray:
@@ -359,6 +402,10 @@ def main() -> None:
             raise SystemExit("--render_every must be >= 1")
         cfg.sim.render_interval = args.render_every
     cfg.furniture.log_resets = True
+    # the phase tag (infos eval_state phase/id) and the phase rewards are recorded every step
+    cfg.furniture.track_phases = True
+    if args.phase_hold_steps is not None:
+        cfg.furniture.phase_hold_steps = args.phase_hold_steps
     if args.randomness is not None:
         cfg.furniture.randomness = args.randomness
     if args.part_assets is not None:
@@ -385,7 +432,8 @@ def main() -> None:
     f = cfg.furniture
     print(f"[collect] env: randomness {f.randomness}, parts {f.part_assets} ({f.mesh_frame}), masses {f.part_masses}, "
           f"gripper {f.gripper_mode} ({f.gripper_effort} N, speed {f.gripper_velocity_limit}, self-collisions {f.robot_self_collisions}), friction parts {f.part_friction} "
-          f"obstacles {f.obstacle_friction} robot {f.robot_friction}, ee_vel_point {f.ee_vel_point}, obstacle_offset {f.obstacle_offset}", flush=True)
+          f"obstacles {f.obstacle_friction} robot {f.robot_friction}, ee_vel_point {f.ee_vel_point}, obstacle_offset {f.obstacle_offset}, "
+          f"phase_hold_steps {f.phase_hold_steps}", flush=True)
     if args.record:
         cfg.scene.clone_in_fabric = False
         setattr(
@@ -403,6 +451,9 @@ def main() -> None:
         )
     env = AssemblyEnv(cfg)
     N = env.num_envs
+    # every reward the env defines (unweighted) and every termination of the training env, recorded per step
+    reward_terms = manager_terms(RewardsCfg(), RewardTermCfg)
+    termination_terms = manager_terms(TerminationsCfg(), TerminationTermCfg)
     part_names = list(cfg.furniture.part_names)
     out_root = Path(args.out_dir).expanduser() / "one_leg"
     fails_dir = out_root / "fails"
@@ -471,7 +522,7 @@ def main() -> None:
         keys.new_attempt()
         env.reset()
         for _ in range(5):
-            env.step(zero)  # let the parts settle after the reset
+            settle_infos = env.step(zero)[4]  # let the parts settle after the reset
         # one round: N attempts side by side, every env with its own expert
         eps = []
         for i in range(N):
@@ -485,6 +536,8 @@ def main() -> None:
                 attempt=attempt, policy=policy, variation=variation, dart=dart, active=True,
                 obs=[], acts=[], acts_exec=[], rews=[], skills=[], assembled_step=None, last_state="",
                 aborted=False, out_of_limits=False, final_obs=None, obstacles=obstacles_robot(env, i),
+                infos=[], infos_initial=env_slice(settle_infos, i, N), reward_terms={k: [] for k in reward_terms},
+                termination_terms={k: [] for k in termination_terms}, env_terminated=[], env_truncated=[],
             ))
         tmp_video = out_root / f".round{rnd}.mp4"
         recorder = Recorder(env, tmp_video) if args.record else None
@@ -539,9 +592,20 @@ def main() -> None:
                 print(f"[collect] step {t:4d}: round failed by key", flush=True)
             if not acted:
                 break
-            env.step(actions)
+            _, _, env_terminated, env_truncated, step_infos = env.step(actions)
+            rewards_now = {k: v.detach().cpu().numpy() for k, v in term_values(env, reward_terms).items()}
+            ends_now = {k: v.detach().cpu().numpy() for k, v in term_values(env, termination_terms).items()}
+            env_terminated = env_terminated.reshape(-1).detach().cpu().numpy()
+            env_truncated = env_truncated.reshape(-1).detach().cpu().numpy()
             for i, a in acted:
                 ep = eps[i]
+                ep["infos"].append(env_slice(step_infos, i, N))
+                for k, v in rewards_now.items():
+                    ep["reward_terms"][k].append(float(v[i]))
+                for k, v in ends_now.items():
+                    ep["termination_terms"][k].append(bool(v[i]))
+                ep["env_terminated"].append(bool(env_terminated[i]))
+                ep["env_truncated"].append(bool(env_truncated[i]))
                 if a.assembled and ep["assembled_step"] is None:  # the policy's own check fired
                     ep["assembled_step"] = len(ep["acts"]) - 1
                     print(f"[collect] env {i} step {t:4d}: assembled", flush=True)
@@ -587,6 +651,14 @@ def main() -> None:
                 "obstacles_robot": ep["obstacles"],
                 # the expert drawn for this attempt (--vary; None = the fixed expert)
                 "variation": ep["variation"],
+                # the env's own data per step (the module docstring): infos, unweighted reward terms, the
+                # training env's termination terms, the collection env's flags
+                "infos": ep["infos"],
+                "infos_initial": ep["infos_initial"],
+                "reward_terms": ep["reward_terms"],
+                "termination_terms": ep["termination_terms"],
+                "env_terminated": ep["env_terminated"],
+                "env_truncated": ep["env_truncated"],
                 "error": ep["aborted"] or ep["out_of_limits"],
                 "error_description": "failed by key" if ep["aborted"] else ("part out of position limits" if ep["out_of_limits"] else ""),
             }

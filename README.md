@@ -211,6 +211,18 @@ synchronous rounds (a round lasts as long as its slowest attempt; finished envs 
 Prints and `--record` follow env 0. `--seed` now also seeds the env's reset randomization, so
 a new collection needs a new `--seed` or it repeats the same starts.
 
+### The env's own data in each pkl
+
+Per step of the attempt the pkl also carries what the env produced, so a training-time demo loader copies it
+instead of recomputing it (phase tracking, `furniture.track_phases`, is switched on for this):
+
+- `infos`: the env's `step()` infos for this env after the step (`eval_state` with the phase tag `phase/id`,
+  the metric channels, ...); `infos_initial` the infos of the settle step before the first observation;
+- `reward_terms`: every term of `RewardsCfg`, its own value (unweighted, zero-weight terms included), so a loader
+  applies the training config's weights;
+- `termination_terms`: every term of the training env's `TerminationsCfg` (the collection env ends none of them);
+- `env_terminated` / `env_truncated`: the collection env's own flags.
+
 ### Where demos go
 
 Collect demo sets meant for training under `datasets/` in this repo (git-ignored), one folder per
