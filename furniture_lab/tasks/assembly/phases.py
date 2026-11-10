@@ -52,6 +52,7 @@ The geometry is pure torch (below, tested on CPU); :class:`OneLegPhases` reads t
 
 from __future__ import annotations
 
+import functools
 import math
 from typing import TYPE_CHECKING, Dict
 
@@ -183,38 +184,50 @@ def decode_states(states: torch.Tensor, mesh_frame: str):
     return _decode_states(states, mesh_frame)
 
 
-def _decode_states(states: torch.Tensor, mesh_frame: str):
-    """``-FBAbs-ResiP`` observations ``(T, 63)`` (see :func:`phases_from_states`) -> the TCP, the finger width, the
-    top's and leg 4's positions, the leg's pose in the top's frame (USD ``mesh_frame``, as the tracker measures it)
-    and ``(hole, axis, ref)`` in that frame."""
-    import numpy as np
-
-    from ...failures import HOLE
-    from ..furniture import frames
-    from ..furniture.square_table import MESH_FRAMES, pairs_for
-
-    if states.dim() != 2 or states.shape[1] != 63:
-        raise ValueError(f"the offline phase checks take (T, 63) -FBAbs-ResiP observations, got {tuple(states.shape)}")
-    states = states.to(torch.float32)
-    dev = states.device
-    R = np.asarray(MESH_FRAMES[mesh_frame], dtype=np.float64)
-    as_t = lambda v: torch.tensor(R @ np.asarray(v, dtype=np.float64), dtype=torch.float32, device=dev)  # noqa: E731
-    axis, ref, hole = as_t([0.0, 1.0, 0.0]), as_t([1.0, 0.0, 0.0]), as_t(HOLE)
-    (top, leg), = pairs_for("one_leg")
-    from ..furniture.assembly import relative_pose
-
-    # mdp/rot6d.py is plain torch, but the mdp package's __init__ imports Isaac Lab: load the file alone
+@functools.lru_cache(maxsize=None)
+def _rot6d_module():
+    """mdp/rot6d.py is plain torch, but the mdp package's __init__ imports Isaac Lab: load the file alone, once."""
     import importlib.util
     from pathlib import Path
 
     spec = importlib.util.spec_from_file_location("_phases_rot6d", Path(__file__).parent / "mdp" / "rot6d.py")
     rot6d = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(rot6d)
+    return rot6d
+
+
+@functools.lru_cache(maxsize=None)
+def _decode_constants(mesh_frame: str, device: str):
+    """``(axis, ref, hole, R_mesh)`` of ``mesh_frame`` as device tensors, built once per device: building them on
+    every call (every env step, for the tracker) is a host-to-device copy each, i.e. a host synchronization."""
+    import numpy as np
+
+    from ...failures import HOLE
+    from ..furniture.square_table import MESH_FRAMES
+
+    R = np.asarray(MESH_FRAMES[mesh_frame], dtype=np.float64)
+    as_t = lambda v: torch.tensor(R @ np.asarray(v, dtype=np.float64), dtype=torch.float32, device=device)  # noqa: E731
+    return as_t([0.0, 1.0, 0.0]), as_t([1.0, 0.0, 0.0]), as_t(HOLE), torch.tensor(R, dtype=torch.float32, device=device)
+
+
+def _decode_states(states: torch.Tensor, mesh_frame: str):
+    """``-FBAbs-ResiP`` observations ``(T, 63)`` (see :func:`phases_from_states`) -> the TCP, the finger width, the
+    top's and leg 4's positions, the leg's pose in the top's frame (USD ``mesh_frame``, as the tracker measures it)
+    and ``(hole, axis, ref)`` in that frame."""
+    from ..furniture.square_table import pairs_for
+
+    if states.dim() != 2 or states.shape[1] != 63:
+        raise ValueError(f"the offline phase checks take (T, 63) -FBAbs-ResiP observations, got {tuple(states.shape)}")
+    states = states.to(torch.float32)
+    axis, ref, hole, R_mesh = _decode_constants(mesh_frame, str(states.device))
+    (top, leg), = pairs_for("one_leg")
+    from ..furniture.assembly import relative_pose
+
+    rot6d = _rot6d_module()
     mat_to_quat, rot6d_to_mat = rot6d.mat_to_quat, rot6d.rot6d_to_mat
 
     parts = states[:, 16:61].reshape(-1, 5, 9)
     # the observation's OBJ-frame orientation back to the USD frame the tracker reads: R_usd = R_obj R_mesh^T
-    R_mesh = torch.tensor(R, dtype=torch.float32, device=dev)
     def usd_pose(index):
         R_usd = rot6d_to_mat(parts[:, index, 3:9]) @ R_mesh.T
         return parts[:, index, 0:3], mat_to_quat(R_usd)
@@ -418,9 +431,9 @@ class OneLegPhases:
         # the labels come from what the policy observes (the -FBAbs-ResiP observation's terms), decoded and checked by the
         # same functions the offline labelling of recorded observations uses (decode_states, phase_checks, phase_step)
         tcp_b, width, top_b, leg_b, rel_pos, rel_quat, frames = decode_states(observed_states(env), f.mesh_frame)
-        if bool(self.need_rest.any()):
-            self.rest_z = torch.where(self.need_rest, leg_b[:, 2], self.rest_z)
-            self.need_rest[:] = False
+        # the leg's resting height, taken at its first measurement after a reset (no host check: a where every step)
+        self.rest_z = torch.where(self.need_rest, leg_b[:, 2], self.rest_z)
+        self.need_rest[:] = False
         front_b, _ = subtract_frame_transforms(root_pos, root_quat, env.scene["obstacle_front"].data.root_pos_w)
         left_b, _ = subtract_frame_transforms(root_pos, root_quat, env.scene["obstacle_left"].data.root_pos_w)
 
@@ -457,9 +470,8 @@ class OneLegPhases:
 
         tm = env.termination_manager
         still = self._stall(pos_w[:, self.leg], quat_w[:, self.leg])
-        if bool(self.stalled.any()):
-            # ends the episode as a failure (terminated, not a time limit), before anything reads the dones
-            tm._terminated_buf |= self.stalled
+        # a stall ends the episode as a failure (terminated, not a time limit), before anything reads the dones
+        tm._terminated_buf |= self.stalled
         done = tm.dones
         success = tracker(env).all_assembled()
         time_out = tm.get_term("time_out") if "time_out" in tm.active_terms else torch.zeros_like(done)

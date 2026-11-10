@@ -27,11 +27,22 @@ def test_the_projection_recovers_the_wrench_behind_the_torques(dynamic):
 
 def test_the_sign_convention_pressing_down_reads_an_upward_force():
     # a one-joint "arm" whose joint torque pushes the EE down: tau_J = J^T F_robot_on_env,
-    # the external wrench is the reaction, +z
+    # the external wrench is the reaction, +z. Its Jacobian is rank 1, so the estimator's damping (the
+    # cfg's wrench_damping, always > 0 in the env) is what makes the 6 x 6 system solvable
     jac = torch.zeros((1, 6, 7))
     jac[0, 2, 0] = 1.0  # joint 0 moves the EE along z
     tau_j = torch.tensor([[-3.0, 0, 0, 0, 0, 0, 0]])  # pushing down with 3 N
-    assert project_torques(jac, -tau_j)[0, 2].item() == pytest.approx(3.0)
+    assert project_torques(jac, -tau_j, damping=1e-4)[0, 2].item() == pytest.approx(3.0, abs=1e-5)
+    # undamped, the singular system is refused with a zero wrench (never NaN)
+    assert torch.equal(project_torques(jac, -tau_j), torch.zeros((1, 6)))
+
+
+def test_the_projection_runs_damped_through_the_estimator_config():
+    jac, mass, wrench = random_arm()
+    tau_ext = (jac.transpose(1, 2) @ wrench.unsqueeze(-1)).squeeze(-1)
+    for dynamic in (False, True):
+        out = project_torques(jac, tau_ext, mass if dynamic else None, damping=1e-4)
+        assert torch.allclose(out, wrench, atol=1e-4)
 
 
 def test_ema_is_forges_and_reaches_a_constant():

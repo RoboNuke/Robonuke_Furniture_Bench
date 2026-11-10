@@ -68,8 +68,7 @@ def mat_to_quat(R: torch.Tensor) -> torch.Tensor:
         ),
         dim=-2,
     )
-    flr = torch.tensor(0.1, dtype=R.dtype, device=R.device)
-    quat_candidates = quat_by_wxyz / (2.0 * q_abs[..., None].max(flr))
+    quat_candidates = quat_by_wxyz / (2.0 * q_abs[..., None].clamp(min=0.1))
     best = q_abs.argmax(dim=-1)
     q = torch.gather(quat_candidates, -2, best[..., None, None].expand(*best.shape, 1, 4)).squeeze(-2)
     q = torch.where(q[..., :1] < 0, -q, q)

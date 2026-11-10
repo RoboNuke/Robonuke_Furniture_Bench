@@ -169,6 +169,10 @@ def install():
         "isaaclab.envs.mdp.actions.task_space_actions",
         DifferentialInverseKinematicsAction=type("DifferentialInverseKinematicsAction", (), {"__init__": lambda self, *a, **k: None}),
     )
+    module(
+        "isaaclab.controllers.differential_ik",
+        DifferentialIKController=type("DifferentialIKController", (), {"__init__": lambda self, *a, **k: None}),
+    )
 
     class ManagerBasedRLEnvCfg:
         def __init__(self, **kwargs):

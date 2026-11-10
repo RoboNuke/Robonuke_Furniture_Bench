@@ -19,7 +19,9 @@ On the Franka that is ``O_F_ext_hat_K`` from ``tau_ext_hat_filtered``. Here:
 * the projection is the Moore-Penrose pseudo-inverse of ``J^T`` (``wrench_projection:
   pinv``) or the dynamically consistent one ``Lambda J M^-1`` (``dynamic``), ``J`` the
   geometric Jacobian of FurnitureBench's EE frame (``panda_hand`` + 0.1034 m) in the base
-  frame;
+  frame, solved on the device (``furniture_lab.linalg``: a Cholesky solve of ``J J^T``, damped
+  by ``wrench_damping``; ``torch.linalg.pinv`` would synchronize with the host twice per
+  substep);
 * noise is added where it arises on the robot: Gaussian on each joint torque before the
   projection (``wrench_noise_joint_torque``, N m), and, if wanted, on the projected wrench
   (``wrench_noise``, N / N m); then an EMA with ``wrench_smoothing`` (Forge's
@@ -37,6 +39,8 @@ from typing import TYPE_CHECKING, Sequence
 
 import torch
 
+from ...linalg import damped_pinv_t_apply, spd_solve
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
@@ -47,15 +51,24 @@ EE_OFFSET = (0.0, 0.0, 0.1034)
 
 
 # ---------------------------------------------------------------------- the math (no sim)
-def project_torques(jacobian: torch.Tensor, tau_ext: torch.Tensor, mass_matrix: torch.Tensor | None = None) -> torch.Tensor:
+def project_torques(
+    jacobian: torch.Tensor, tau_ext: torch.Tensor, mass_matrix: torch.Tensor | None = None, damping: float = 0.0
+) -> torch.Tensor:
     """``F = (J^T)^+ tau_ext`` per env; with ``mass_matrix`` the dynamically consistent
-    inverse ``F = (J M^-1 J^T)^-1 J M^-1 tau_ext``. ``jacobian`` is ``(N, 6, n)``."""
+    inverse ``F = (J M^-1 J^T)^-1 J M^-1 tau_ext``. ``jacobian`` is ``(N, 6, n)``. Both are Cholesky
+    solves on the device (no host synchronization), ``damping`` added as ``damping^2 I`` to the
+    ``6 x 6`` system (0: the exact pseudo-inverse for a full-rank Jacobian)."""
     if mass_matrix is None:
-        return (torch.linalg.pinv(jacobian.transpose(1, 2)) @ tau_ext.unsqueeze(-1)).squeeze(-1)
-    m_inv = torch.linalg.inv(mass_matrix)
-    j_m_inv = jacobian @ m_inv
-    lam = torch.linalg.inv(j_m_inv @ jacobian.transpose(1, 2))
-    return (lam @ j_m_inv @ tau_ext.unsqueeze(-1)).squeeze(-1)
+        return damped_pinv_t_apply(jacobian, tau_ext, damping)
+    # M^-1 J^T and M^-1 tau by one SPD solve of M, then the 6 x 6 system Lambda^-1 F = J M^-1 tau
+    rhs = torch.cat((jacobian.transpose(1, 2), tau_ext.unsqueeze(-1)), dim=-1).to(torch.float64)
+    sol = spd_solve(mass_matrix.to(torch.float64), rhs)
+    m_inv_jt, m_inv_tau = sol[:, :, :-1], sol[:, :, -1:]
+    j64 = jacobian.to(torch.float64)
+    system = j64 @ m_inv_jt
+    if damping:
+        system = system + (damping * damping) * torch.eye(system.shape[-1], dtype=system.dtype, device=system.device)
+    return spd_solve(system, j64 @ m_inv_tau).squeeze(-1).to(tau_ext.dtype)
 
 
 def ema(state: torch.Tensor, value: torch.Tensor, alpha: float) -> torch.Tensor:
@@ -83,8 +96,8 @@ class JointTorqueWrench:
         self.cfg = cfg
         robot = env.scene["robot"]
         self.robot = robot
-        self.joint_ids, _ = robot.find_joints("panda_joint.*")
-        self.joint_ids = list(self.joint_ids)
+        joint_ids, _ = robot.find_joints("panda_joint.*")
+        self.joint_ids = list(joint_ids)
         body_ids, _ = robot.find_bodies("panda_hand")
         self.body_idx = int(body_ids[0])
         self.parent_idx = int(robot.find_bodies("panda_link7")[0][0])
@@ -92,6 +105,9 @@ class JointTorqueWrench:
         self.jacobi_body_idx = self.body_idx - 1 if robot.is_fixed_base else self.body_idx
         self.jacobi_joint_ids = self.joint_ids if robot.is_fixed_base else [i + 6 for i in self.joint_ids]
         n, dev = env.num_envs, env.device
+        # the indices as device tensors: indexing with a Python list copies it to the device every substep
+        self.joint_index = torch.tensor(self.joint_ids, dtype=torch.long, device=dev)
+        self.jacobi_joint_index = torch.tensor(self.jacobi_joint_ids, dtype=torch.long, device=dev)
         self.offset = torch.tensor(EE_OFFSET, device=dev, dtype=torch.float32).expand(n, -1)
         self.alpha = float(cfg.wrench_smoothing)
         if not 0.0 < self.alpha <= 1.0:
@@ -100,6 +116,12 @@ class JointTorqueWrench:
             raise ValueError(f"furniture.wrench_projection must be pinv or dynamic, got {cfg.wrench_projection!r}")
         self.tau_std = _std(cfg.wrench_noise_joint_torque, len(self.joint_ids), dev, "joint torque")
         self.wrench_std = _std(cfg.wrench_noise, 6, dev, "wrench")
+        # decided once: asking the device every substep would be a host synchronization
+        self.tau_noisy = bool((self.tau_std > 0).any())
+        self.wrench_noisy = bool((self.wrench_std > 0).any())
+        self.damping = float(cfg.wrench_damping)
+        if self.damping < 0:
+            raise ValueError(f"furniture.wrench_damping must be >= 0, got {self.damping}")
         if cfg.wrench_coriolis and not hasattr(robot.root_physx_view, "get_coriolis_and_centrifugal_compensation_forces"):
             raise RuntimeError("furniture.wrench_coriolis: this PhysX build has no get_coriolis_and_centrifugal_compensation_forces")
         self.raw = torch.zeros((n, 6), device=dev)
@@ -113,7 +135,7 @@ class JointTorqueWrench:
         from isaaclab.utils.math import matrix_from_quat, quat_apply, quat_apply_inverse, quat_inv, skew_symmetric_matrix
 
         robot = self.robot
-        jac = robot.root_physx_view.get_jacobians()[:, self.jacobi_body_idx, :, self.jacobi_joint_ids].clone()
+        jac = robot.root_physx_view.get_jacobians()[:, self.jacobi_body_idx, :, self.jacobi_joint_index].clone()
         base_inv = matrix_from_quat(quat_inv(robot.data.root_quat_w))
         jac[:, 0:3, :] = base_inv @ jac[:, 0:3, :]
         jac[:, 3:6, :] = base_inv @ jac[:, 3:6, :]
@@ -133,9 +155,9 @@ class JointTorqueWrench:
 
     def external_torques(self) -> torch.Tensor:
         """``tau_ext = [M q''] + [c] - tau_J`` over the arm joints, noise on ``tau_J``."""
-        robot, ids = self.robot, self.joint_ids
+        robot, ids = self.robot, self.joint_index
         tau_j = robot.data.applied_torque[:, ids]
-        if self.tau_std.any():
+        if self.tau_noisy:
             tau_j = tau_j + torch.randn_like(tau_j) * self.tau_std
         tau = -tau_j
         if self.cfg.wrench_coriolis:
@@ -145,7 +167,7 @@ class JointTorqueWrench:
         return tau
 
     def mass_matrix(self) -> torch.Tensor:
-        ids = self.joint_ids
+        ids = self.joint_index
         return self.robot.root_physx_view.get_generalized_mass_matrices()[:, ids, :][:, :, ids]
 
     # ------------------------------------------------------------------ the step
@@ -153,8 +175,8 @@ class JointTorqueWrench:
         """One physics substep: estimate, add wrench noise, filter."""
         self.tau_ext = self.external_torques()
         mass = self.mass_matrix() if self.cfg.wrench_projection == "dynamic" else None
-        wrench = project_torques(self.jacobian_b(), self.tau_ext, mass)
-        if self.wrench_std.any():
+        wrench = project_torques(self.jacobian_b(), self.tau_ext, mass, self.damping)
+        if self.wrench_noisy:
             wrench = wrench + torch.randn_like(wrench) * self.wrench_std
         self.raw = wrench
         self.filtered = ema(self.filtered, wrench, self.alpha)

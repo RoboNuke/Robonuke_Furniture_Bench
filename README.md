@@ -123,6 +123,10 @@ put in a group (none by default, so the task ids' observations are unchanged).
 | `wrench_coriolis` | false | remove PhysX's Coriolis/centrifugal torques |
 | `wrench_inertial` | false (true in `-FBAbs-ResiP-Hybrid-v0`) | remove `M q''` (finite-differenced joint acceleration): without it the estimate reads the arm's own acceleration as contact (~1 N in fast free-space moves) |
 | `wrench_projection` | pinv | `pinv` (Moore-Penrose) or `dynamic` (`Lambda J M^-1`) |
+| `wrench_damping` | 1e-4 | damping added as `damping^2 I` to the projection's 6 x 6 system (0: the exact pseudo-inverse; a small value stays bounded at a singular pose) |
+
+Both projections are Cholesky solves on the device (`furniture_lab/linalg.py`); `torch.linalg.pinv`
+would synchronize with the host twice per physics substep.
 
 `scripts/wrench_probe.py` runs a press-and-twist script with the parts off the table and
 prints the estimate next to PhysX's joint reaction wrench on `panda_hand`, both as the
@@ -239,6 +243,16 @@ and has no such error. The ResiP tasks' arm term is `mdp.tcp_ik.TcpDifferentialI
 Lab's term with the lever rotated into the root frame (`furniture_lab/tcp_jacobian.py`, checked
 against finite differences of a 7-joint arm's TCP). Isaac Lab's OSC term has the same lever in
 `_compute_ee_jacobian`; the port's OSC tasks are not changed.
+
+The term's substep (it runs 12 times per control step) never synchronizes with the host: the joint
+and Jacobian indices are device tensors, the zero-quaternion guard is a `torch.where`, and the solve
+is damped least squares `J^T (J J^T + lambda^2 I)^-1 dx` by a float64 Cholesky on the device
+(`furniture_lab/linalg.py`; `ik_method: dls`, `lambda_val` = `RESIP_IK_DAMPING` = 1e-4). Isaac Lab's
+`pinv` (an SVD, what ran before 2026-11-10) and its own `dls` (`torch.inverse`) read cusolver's
+status back to the host every call. Against `pinv` the damping scales the step along a singular
+direction `sigma` by `sigma^2 / (sigma^2 + lambda^2)`: below 1e-4 relative at `sigma >= 0.01`, the
+same controller, and bounded instead of unbounded at a singular pose. The binary gripper term
+(`mdp/gripper.py`'s `BinaryJointPositionAction`) is Isaac Lab's with the same device index.
 
 ### Free-hand steps and the ResiP observation
 

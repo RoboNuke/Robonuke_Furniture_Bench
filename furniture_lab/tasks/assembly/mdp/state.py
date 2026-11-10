@@ -91,7 +91,9 @@ def hand_clear(env: "ManagerBasedRLEnv", parts_pos_w: torch.Tensor, pairs: torch
     fingers = robot.find_joints("panda_finger_joint.*")[0]
     released = robot.data.joint_pos[:, fingers].sum(dim=-1) > fcfg.success_release_width  # (N,)
     hand = robot.find_bodies("panda_hand")[0][0]
-    off = torch.tensor(EE_OFFSET, device=env.device, dtype=parts_pos_w.dtype).expand(env.num_envs, -1)
+    from .observations import const
+
+    off = const(EE_OFFSET, env.device, parts_pos_w.dtype).expand(env.num_envs, -1)
     tcp = robot.data.body_pos_w[:, hand] + quat_apply(robot.data.body_quat_w[:, hand], off)  # (N, 3)
     dist = (parts_pos_w[:, pairs[:, 1]] - tcp.unsqueeze(1)).norm(dim=-1)  # (N, M)
     return released.unsqueeze(-1) & (dist > fcfg.success_clearance)

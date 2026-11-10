@@ -411,7 +411,8 @@ def test_resip_sim_cfgs(cfg_module):
         assert type(grip).__name__ == "BinaryJointPositionActionCfg"  # the task's binary position term
         assert cfg.events.finger_limits is None
         arm = cfg.actions.fb.arm if hasattr(cfg.actions, "fb") else cfg.actions.arm
-        assert arm.controller.use_relative_mode is (not absolute) and arm.controller.ik_method == "pinv"
+        assert arm.controller.use_relative_mode is (not absolute) and arm.controller.ik_method == "dls"
+        assert arm.controller.ik_params == {"lambda_val": cfg_module.RESIP_IK_DAMPING}  # the sync-free solve
         assert arm.class_type.__name__ == "TcpDifferentialIKAction"  # the TCP lever in the root frame, the only IK
         # ResiP's own gripper, opt-in: effort mode, +-13 N per finger, travel 0.0325, their finger speed, self-collisions off
         f.gripper_mode, f.robot_self_collisions, f.gripper_velocity_limit = "effort", False, cfg_module.RESIP_FINGER_SPEED

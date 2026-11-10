@@ -43,11 +43,7 @@ from typing import List, Optional, Tuple
 import isaaclab.sim as sim_utils
 from isaaclab.controllers import DifferentialIKControllerCfg, OperationalSpaceControllerCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
-from isaaclab.envs.mdp.actions.actions_cfg import (
-    BinaryJointPositionActionCfg,
-    DifferentialInverseKinematicsActionCfg,
-    OperationalSpaceControllerActionCfg,
-)
+from isaaclab.envs.mdp.actions.actions_cfg import DifferentialInverseKinematicsActionCfg, OperationalSpaceControllerActionCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -268,13 +264,16 @@ class FurnitureCfg:
     #: seven) and on the projected wrench (one value, (force, torque), or six);
     #: whether the Coriolis / inertial (M q'') terms are removed from the torques (the
     #: robot carries no gravity in this env); the projection, Moore-Penrose (pinv) or
-    #: dynamically consistent (dynamic)
+    #: dynamically consistent (dynamic), solved on the device with ``wrench_damping`` added as
+    #: damping^2 I to its 6 x 6 system (0: the exact pseudo-inverse; a small value keeps it
+    #: bounded at a singular arm pose)
     wrench_smoothing: float = 0.25
     wrench_noise_joint_torque: Tuple[float, ...] = (0.0,)
     wrench_noise: Tuple[float, ...] = (0.0,)
     wrench_coriolis: bool = False
     wrench_inertial: bool = False
     wrench_projection: str = "pinv"
+    wrench_damping: float = 1.0e-4
 
 
 @configclass
@@ -301,7 +300,9 @@ class ActionsCfg:
         position_scale=0.025,
         orientation_scale=0.1,
     )
-    gripper = BinaryJointPositionActionCfg(
+    # the port's binary position term (mdp/gripper.py): Isaac Lab's with the target written through a device
+    # index instead of a Python list, which would synchronize with the host every physics substep
+    gripper = mdp.BinaryJointPositionActionCfg(
         asset_name="robot",
         joint_names=["panda_finger_joint.*"],
         open_command_expr={"panda_finger_joint.*": frames.MAX_GRIPPER_WIDTH / 2},
@@ -756,12 +757,21 @@ POSITION_FINGER_SPEED = 0.2
 RESIP_CONTACT_FRICTION = 1.0
 
 
+#: the differential IK's damping (``ik_params["lambda_val"]``): a least-squares step ``J^T (J J^T + lambda^2 I)^-1 dx``
+#: solved on the device every physics substep (``mdp/tcp_ik.py``). Against the pseudo-inverse (``pinv``, what the
+#: datasets and runs before 2026-11-10 used) it scales the step along a singular direction sigma by
+#: sigma^2 / (sigma^2 + lambda^2): below 1e-4 relative for sigma >= 0.01, i.e. the same controller, and bounded
+#: instead of unbounded at a singular pose
+RESIP_IK_DAMPING = 1.0e-4
+
+
 def dik_arm_cfg(absolute: bool) -> DifferentialInverseKinematicsActionCfg:
-    """ResiP's arm controller as an Isaac Lab term: differential IK (least squares,
-    ``pinv``) of FurnitureBench's EE frame to joint position targets, with the TCP Jacobian
-    fixed (``mdp.tcp_ik.TcpDifferentialIKAction``). Relative: the 6-d
-    ``[dpos, axis-angle]`` in the base frame, scaled like the OSC term (an action of 1 is
-    2.5 cm / 0.1 rad); absolute: the 7-d target ``[pos, quat wxyz]`` in the base frame."""
+    """ResiP's arm controller as an Isaac Lab term: differential IK (least squares, ``dls`` with
+    ``RESIP_IK_DAMPING``) of FurnitureBench's EE frame to joint position targets, with the TCP
+    Jacobian fixed and the solve kept on the device (``mdp.tcp_ik.TcpDifferentialIKAction``).
+    Relative: the 6-d ``[dpos, axis-angle]`` in the base frame, scaled like the OSC term (an
+    action of 1 is 2.5 cm / 0.1 rad); absolute: the 7-d target ``[pos, quat wxyz]`` in the base
+    frame."""
     from .mdp.tcp_ik import TcpDifferentialIKAction
 
     cfg = DifferentialInverseKinematicsActionCfg(
@@ -769,7 +779,9 @@ def dik_arm_cfg(absolute: bool) -> DifferentialInverseKinematicsActionCfg:
         joint_names=["panda_joint.*"],
         body_name="panda_hand",
         body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=EE_OFFSET),
-        controller=DifferentialIKControllerCfg(command_type="pose", use_relative_mode=not absolute, ik_method="pinv"),
+        controller=DifferentialIKControllerCfg(
+            command_type="pose", use_relative_mode=not absolute, ik_method="dls", ik_params={"lambda_val": RESIP_IK_DAMPING}
+        ),
         scale=1.0 if absolute else (0.025, 0.025, 0.025, 0.1, 0.1, 0.1),
     )
     # Isaac Lab's term puts the TCP offset's lever in the hand frame on a root-frame Jacobian;

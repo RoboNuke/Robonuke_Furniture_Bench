@@ -27,16 +27,32 @@ from isaaclab.utils import configclass
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
 
-__all__ = ["BinaryJointEffortAction", "BinaryJointEffortActionCfg", "set_finger_limits"]
+__all__ = [
+    "BinaryJointEffortAction", "BinaryJointEffortActionCfg", "BinaryJointPositionAction", "BinaryJointPositionActionCfg",
+    "set_finger_limits",
+]
 
 
-class BinaryJointEffortAction(BinaryJointAction):
+class _TensorJointIds:
+    """Isaac Lab's binary terms keep their joint ids as a Python list and index the articulation's target buffer
+    with it every physics substep: each is a host-to-device copy, i.e. a host synchronization. The ids as a
+    device tensor index without one."""
+
+    def _joint_index(self) -> torch.Tensor:
+        index = getattr(self, "_joint_index_t", None)
+        if index is None:
+            index = torch.as_tensor(list(self._joint_ids), dtype=torch.long, device=self.device)
+            self._joint_index_t = index
+        return index
+
+
+class BinaryJointEffortAction(_TensorJointIds, BinaryJointAction):
     """The binary open / close command as a joint effort on each joint (N for the fingers)."""
 
     cfg: "BinaryJointEffortActionCfg"
 
     def apply_actions(self):
-        self._asset.set_joint_effort_target(self._processed_actions, joint_ids=self._joint_ids)
+        self._asset.set_joint_effort_target(self._processed_actions, joint_ids=self._joint_index())
 
 
 @configclass
@@ -44,6 +60,23 @@ class BinaryJointEffortActionCfg(BinaryJointActionCfg):
     """``open_command_expr`` / ``close_command_expr``: the effort per joint (ResiP: +13 / -13 N)."""
 
     class_type: type = BinaryJointEffortAction
+
+
+class BinaryJointPositionAction(_TensorJointIds, BinaryJointAction):
+    """Isaac Lab's ``BinaryJointPositionAction`` (the open / close command as joint position targets) with the
+    target written through a device index: no host synchronization per substep."""
+
+    cfg: "BinaryJointPositionActionCfg"
+
+    def apply_actions(self):
+        self._asset.set_joint_position_target(self._processed_actions, joint_ids=self._joint_index())
+
+
+@configclass
+class BinaryJointPositionActionCfg(BinaryJointActionCfg):
+    """Isaac Lab's ``BinaryJointPositionActionCfg`` with the sync-free term."""
+
+    class_type: type = BinaryJointPositionAction
 
 
 def set_finger_limits(env: "ManagerBasedEnv", env_ids: torch.Tensor, upper: float, asset_cfg: SceneEntityCfg) -> None:

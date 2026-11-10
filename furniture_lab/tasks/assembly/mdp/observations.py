@@ -9,7 +9,8 @@ frame (what the controller and the parts share), and quaternions are Isaac Lab's
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import functools
+from typing import TYPE_CHECKING, Sequence
 
 import torch
 
@@ -22,13 +23,30 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
+@functools.lru_cache(maxsize=None)
+def _cached(values: tuple, device: str, dtype: torch.dtype) -> torch.Tensor:
+    return torch.tensor(values, device=device, dtype=dtype)
+
+
+def const(values: Sequence, device, dtype=torch.float32) -> torch.Tensor:
+    """A constant as a device tensor, built once per (value, device, dtype): building it inside an observation
+    term is a host-to-device copy, i.e. a host synchronization, on every call."""
+    as_t = torch.as_tensor(values, dtype=torch.float64)
+    return _cached(tuple(as_t.reshape(-1).tolist()), str(device), dtype).reshape(tuple(as_t.shape))
+
+
+def index(ids: Sequence[int], device) -> torch.Tensor:
+    """Joint / body ids as a device long tensor, built once: indexing with a Python list copies it every call."""
+    return _cached(tuple(int(i) for i in ids), str(device), torch.long)
+
+
 def _ee_pose_b(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg, offset: tuple):
     """Pose of the end-effector body (plus a fixed offset along it) in the robot-base frame."""
     robot = env.scene[asset_cfg.name]
     body = asset_cfg.body_ids[0]
     pos_w = robot.data.body_pos_w[:, body]
     quat_w = robot.data.body_quat_w[:, body]
-    off = torch.tensor(offset, device=env.device, dtype=pos_w.dtype).expand(env.num_envs, -1)
+    off = const(offset, env.device, pos_w.dtype).expand(env.num_envs, -1)
     pos_w, quat_w = combine_frame_transforms(pos_w, quat_w, off)
     return subtract_frame_transforms(robot.data.root_pos_w, robot.data.root_quat_w, pos_w, quat_w)
 
@@ -65,7 +83,7 @@ def ee_vel(
     if offset is None:
         lin_w = robot.data.body_lin_vel_w[:, body]
     else:
-        off = torch.tensor(offset, device=env.device, dtype=ang_w.dtype).expand(env.num_envs, -1)
+        off = const(offset, env.device, ang_w.dtype).expand(env.num_envs, -1)
         r_w = quat_apply(robot.data.body_link_quat_w[:, body], off)
         lin_w = robot.data.body_link_lin_vel_w[:, body] + torch.linalg.cross(ang_w, r_w, dim=-1)
     lin = quat_apply_inverse(robot.data.root_quat_w, lin_w)
@@ -79,7 +97,7 @@ def gripper_width(
 ) -> torch.Tensor:
     """Finger separation, (N, 1): the sum of the two finger joint positions."""
     robot = env.scene[asset_cfg.name]
-    return robot.data.joint_pos[:, asset_cfg.joint_ids].sum(dim=-1, keepdim=True)
+    return robot.data.joint_pos[:, index(asset_cfg.joint_ids, env.device)].sum(dim=-1, keepdim=True)
 
 
 def parts_poses(env: "ManagerBasedRLEnv") -> torch.Tensor:
@@ -109,11 +127,11 @@ def _parts_pose_tag(env: "ManagerBasedRLEnv"):
     pos_b, quat_b = parts_pose_b(env)  # USD mesh frames, robot-base frame, wxyz
     N, P = pos_b.shape[:2]
     device, dtype = pos_b.device, pos_b.dtype
-    tag_pos = torch.tensor(frames.TAG_POS_W, device=device, dtype=dtype).expand(N * P, -1)
-    tag_quat = torch.tensor(frames.mat_to_quat_wxyz(frames.TAG_ROT_W), device=device, dtype=dtype).expand(N * P, -1)
+    tag_pos = const(frames.TAG_POS_W, device, dtype).expand(N * P, -1)
+    tag_quat = const(frames.mat_to_quat_wxyz(frames.TAG_ROT_W), device, dtype).expand(N * P, -1)
     pos_t, quat_t = subtract_frame_transforms(tag_pos, tag_quat, pos_b.reshape(-1, 3), quat_b.reshape(-1, 4))
     # USD frame -> OBJ frame: R_obj = R_usd @ R_mesh (square_table.reset_pose_world's inverse)
-    q_mesh = torch.tensor(frames.mat_to_quat_wxyz(MESH_FRAMES[env.cfg.furniture.mesh_frame]), device=device, dtype=dtype)
+    q_mesh = const(frames.mat_to_quat_wxyz(MESH_FRAMES[env.cfg.furniture.mesh_frame]), device, dtype)
     quat_o = canonical_quat(quat_mul(quat_t, q_mesh.expand(N * P, -1)))
     return pos_t.reshape(N, P, 3), quat_o.reshape(N, P, 4)
 
@@ -146,9 +164,7 @@ def parts_poses_b_rot6d(env: "ManagerBasedRLEnv") -> torch.Tensor:
 
     pos_b, quat_b = parts_pose_b(env)  # USD mesh frames, robot-base frame, wxyz
     N, P = pos_b.shape[:2]
-    q_mesh = torch.tensor(
-        frames.mat_to_quat_wxyz(MESH_FRAMES[env.cfg.furniture.mesh_frame]), device=pos_b.device, dtype=pos_b.dtype
-    )
+    q_mesh = const(frames.mat_to_quat_wxyz(MESH_FRAMES[env.cfg.furniture.mesh_frame]), pos_b.device, pos_b.dtype)
     # USD frame -> OBJ frame: R_obj = R_usd @ R_mesh (the origins coincide)
     quat_o = canonical_quat(quat_mul(quat_b.reshape(-1, 4), q_mesh.expand(N * P, -1)))
     return torch.cat([pos_b, quat_to_rot6d(quat_o).reshape(N, P, 6)], dim=-1).reshape(N, 9 * P)
@@ -263,7 +279,7 @@ def obstacle_pose_tag_rot6d(env: "ManagerBasedRLEnv") -> torch.Tensor:
         robot.data.root_pos_w, robot.data.root_quat_w, obstacle.data.root_pos_w, obstacle.data.root_quat_w
     )
     N, device, dtype = pos_b.shape[0], pos_b.device, pos_b.dtype
-    tag_pos = torch.tensor(frames.TAG_POS_W, device=device, dtype=dtype).expand(N, -1)
-    tag_quat = torch.tensor(frames.mat_to_quat_wxyz(frames.TAG_ROT_W), device=device, dtype=dtype).expand(N, -1)
+    tag_pos = const(frames.TAG_POS_W, device, dtype).expand(N, -1)
+    tag_quat = const(frames.mat_to_quat_wxyz(frames.TAG_ROT_W), device, dtype).expand(N, -1)
     pos_t, quat_t = subtract_frame_transforms(tag_pos, tag_quat, pos_b, quat_b)
     return torch.cat([pos_t, quat_to_rot6d(canonical_quat(quat_t))], dim=-1)

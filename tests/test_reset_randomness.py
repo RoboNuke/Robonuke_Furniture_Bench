@@ -321,9 +321,11 @@ def test_the_effort_gripper_sends_its_command_as_joint_effort(monkeypatch):
         sent = {}
         term = g.BinaryJointEffortAction.__new__(g.BinaryJointEffortAction)
         term._asset = SimpleNamespace(set_joint_effort_target=lambda target, joint_ids=None: sent.update(t=target, ids=joint_ids))
-        term._processed_actions, term._joint_ids = torch.tensor([[13.0, 13.0], [-13.0, -13.0]]), [7, 8]
+        term._processed_actions, term._joint_ids, term.device = torch.tensor([[13.0, 13.0], [-13.0, -13.0]]), [7, 8], "cpu"
         term.apply_actions()
-        assert torch.equal(sent["t"], term._processed_actions) and sent["ids"] == [7, 8]
+        # the ids reach the articulation as a device tensor (a list would be copied to the device every substep)
+        assert torch.equal(sent["t"], term._processed_actions) and torch.equal(sent["ids"], torch.tensor([7, 8]))
+        assert sent["ids"] is term._joint_index()  # built once
         # the travel cap: every finger joint's limits to [0, upper]
         written = {}
         robot = SimpleNamespace(data=SimpleNamespace(joint_pos_limits=torch.tensor([[[0.0, 0.04], [0.0, 0.04]]] * 3)),
