@@ -36,7 +36,8 @@ __all__ = [
 class _TensorJointIds:
     """Isaac Lab's binary terms keep their joint ids as a Python list and index the articulation's target buffer
     with it every physics substep: each is a host-to-device copy, i.e. a host synchronization. The ids as a
-    device tensor index without one."""
+    device tensor index without one. They also make ``_processed_actions`` a new tensor every control step;
+    here it is one fixed buffer, so the substep reading it can run as a CUDA graph (``substep_graph.py``)."""
 
     def _joint_index(self) -> torch.Tensor:
         index = getattr(self, "_joint_index_t", None)
@@ -44,6 +45,14 @@ class _TensorJointIds:
             index = torch.as_tensor(list(self._joint_ids), dtype=torch.long, device=self.device)
             self._joint_index_t = index
         return index
+
+    def process_actions(self, actions: torch.Tensor) -> None:
+        super().process_actions(actions)
+        buf = getattr(self, "_processed_buf", None)
+        if buf is None:
+            buf = self._processed_buf = torch.empty_like(self._processed_actions)
+        buf.copy_(self._processed_actions)
+        self._processed_actions = buf
 
 
 class BinaryJointEffortAction(_TensorJointIds, BinaryJointAction):

@@ -128,6 +128,17 @@ put in a group (none by default, so the task ids' observations are unchanged).
 Both projections are Cholesky solves on the device (`furniture_lab/linalg.py`); `torch.linalg.pinv`
 would synchronize with the host twice per physics substep.
 
+### The substep as a CUDA graph
+
+| `furniture.` field | default | meaning |
+|---|---|---|
+| `cuda_graph` | false | run each physics substep's torch work -- the action terms' IK and gripper command, the parts' reset kick, the wrench estimate and Isaac Lab's actuator model -- as one CUDA graph, replayed each substep between its PhysX reads and writes (`furniture_lab/substep_graph.py`). The same math as one kernel launch instead of a few hundred; the step's cost is launch-bound otherwise. CUDA only |
+
+The graph is captured after three eager substeps. Everything the substep reads from PhysX is fetched
+into fixed buffers first and everything it writes is sent after, in the order the eager substep made the
+calls; the module docstring has the rules the substep's code keeps for it (state in place, no branch on
+the host).
+
 `scripts/wrench_probe.py` runs a press-and-twist script with the parts off the table and
 prints the estimate next to PhysX's joint reaction wrench on `panda_hand`, both as the
 external wrench on the EE in the base frame; `--csv` saves it.

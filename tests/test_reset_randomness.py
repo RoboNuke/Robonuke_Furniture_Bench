@@ -52,6 +52,7 @@ class _Rigid:
         root[:, 3] = 1.0
         self.data = SimpleNamespace(default_root_state=root)
         self.poses, self.wrenches = [], []
+        self.root_physx_view = self  # the kick writes the part's PhysX view directly
 
     def write_root_pose_to_sim(self, pose, env_ids=None):
         self.poses.append((pose.clone(), env_ids))
@@ -59,8 +60,9 @@ class _Rigid:
     def write_root_velocity_to_sim(self, vel, env_ids=None):
         pass
 
-    def set_external_force_and_torque(self, forces, torques, positions=None, body_ids=None, env_ids=None, is_global=False):
-        self.wrenches.append((forces.clone(), torques.clone(), env_ids, is_global))
+    def apply_forces_and_torques_at_position(self, force_data, torque_data, position_data, indices, is_global):
+        assert position_data is None and is_global and indices.dtype == torch.long and force_data.is_contiguous()
+        self.wrenches.append((force_data.clone(), torque_data.clone()))
 
 
 class _Robot:
@@ -159,13 +161,14 @@ def test_the_kick_lasts_their_one_simulate(events):
     top = env.scene["square_table_top"]
     for _ in range(5):
         env.part_kick.apply()
-    # two physics steps of 1/120 s with the force on (= their 1/60 s), one writing zeros, then nothing
+        env.part_kick.write()
+    # two physics steps of 1/120 s with the force on (= their 1/60 s), one writing the zeros, then no PhysX write
     assert len(top.wrenches) == 3
-    for forces, torques, env_ids, is_global in top.wrenches[:2]:
-        assert is_global and env_ids is None and forces.shape == (4, 1, 3)
-        assert torch.equal(forces[:, 0], env.part_kick.force[:, 0]) and torch.equal(torques[:, 0], env.part_kick.torque[:, 0])
+    for forces, torques in top.wrenches[:2]:
+        assert forces.shape == (4, 3)
+        assert torch.equal(forces, env.part_kick.force[:, 0]) and torch.equal(torques, env.part_kick.torque[:, 0])
     assert torch.all(top.wrenches[2][0] == 0) and torch.all(top.wrenches[2][1] == 0)
-    assert env.part_kick.active is False
+    assert torch.all(env.part_kick.left == 0) and env.part_kick.writes_due == 0
 
 
 def test_a_reset_mid_kick_only_kicks_its_own_envs(events):
@@ -176,8 +179,10 @@ def test_a_reset_mid_kick_only_kicks_its_own_envs(events):
     env.part_kick.apply()
     events.randomize_parts_pose(env, torch.tensor([2]))  # env 2 resets again
     env.part_kick.apply()
+    env.part_kick.write()
     forces = env.scene["square_table_leg4"].wrenches[-1][0]
     assert torch.all(forces[[0, 1, 3]] == 0) and torch.any(forces[2] != 0)
+    assert env.part_kick.writes_due == 2  # the re-arm restarted the countdown
 
 
 def test_the_kick_needs_a_physics_step_that_divides_it(events):

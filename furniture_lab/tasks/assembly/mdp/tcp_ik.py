@@ -15,7 +15,9 @@ least squares with :func:`furniture_lab.linalg.damped_pinv_apply` instead (``ik_
 ``lambda_val`` the damping; ``dls`` with ``lambda_val`` 0 is the pseudo-inverse), and
 :meth:`TcpDifferentialIKAction.apply_actions` indexes with device tensors and folds the
 zero-quaternion guard (the first substep before the sim has written body poses) into a
-``torch.where``. Same solve, same 120 Hz, no round trip.
+``torch.where``. Same solve, same 120 Hz, no round trip. The controller's desired pose, which
+Isaac Lab rebinds to new tensors in relative mode, is copied into two fixed buffers at
+``process_actions``, so the substep can run as a CUDA graph (``substep_graph.py``).
 """
 
 from __future__ import annotations
@@ -64,6 +66,15 @@ class TcpDifferentialIKAction(DifferentialInverseKinematicsAction):
         # the joint indices as device tensors: a Python list is copied to the device on every indexing
         self._joint_index = self._as_index(self._joint_ids)
         self._jacobi_joint_index = self._as_index(self._jacobi_joint_ids)
+        self._ee_pos_des = torch.zeros(self.num_envs, 3, device=self.device)
+        self._ee_quat_des = torch.zeros(self.num_envs, 4, device=self.device)
+
+    def process_actions(self, actions: torch.Tensor) -> None:
+        super().process_actions(actions)
+        ctrl = self._ik_controller
+        self._ee_pos_des.copy_(ctrl.ee_pos_des)
+        self._ee_quat_des.copy_(ctrl.ee_quat_des)
+        ctrl.ee_pos_des, ctrl.ee_quat_des = self._ee_pos_des, self._ee_quat_des
 
     def _as_index(self, ids):
         return ids if isinstance(ids, slice) else torch.as_tensor(list(ids), dtype=torch.long, device=self.device)

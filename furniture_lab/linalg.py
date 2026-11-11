@@ -4,7 +4,10 @@
 raise on a singular input: one CPU-GPU round trip per call, two for the SVD-based ``pinv``. Run every
 physics substep for the IK and the wrench estimator (24 substeps per control step), those round trips
 stall the CPU behind the GPU on every one. The ``*_ex`` variants return ``info`` as a tensor instead,
-so the solve stays on the device and a failed row is handled with ``torch.where``.
+so the solve stays on the device and a failed row is handled with ``torch.where``. The two triangular
+solves of the factor are ``torch.linalg.solve_triangular``, not ``torch.cholesky_solve``: the latter's CUDA
+kernel is MAGMA's batched potrs, which allocates device memory on every call and so cannot run inside a
+CUDA graph (``furniture_lab.substep_graph`` captures the substep these solves are part of).
 
 The Jacobians here are ``(N, 6, 7)`` of full row rank, so the Moore-Penrose pseudo-inverse is
 ``J^+ = J^T (J J^T)^-1`` and ``(J^T)^+ = (J J^T)^-1 J`` exactly; ``J J^T`` is symmetric positive
@@ -33,7 +36,8 @@ def spd_solve(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     if b.dim() != 3 or b.shape[:2] != a.shape[:2]:
         raise ValueError(f"spd_solve: b must be (N, k, m) matching a {tuple(a.shape)}, got {tuple(b.shape)}")
     factor, info = torch.linalg.cholesky_ex(a.to(torch.float64))
-    x = torch.cholesky_solve(b.to(torch.float64), factor)
+    y = torch.linalg.solve_triangular(factor, b.to(torch.float64), upper=False)
+    x = torch.linalg.solve_triangular(factor.transpose(1, 2), y, upper=True)
     x = torch.where((info == 0).view(-1, 1, 1), x, torch.zeros_like(x))
     return x.to(b.dtype)
 

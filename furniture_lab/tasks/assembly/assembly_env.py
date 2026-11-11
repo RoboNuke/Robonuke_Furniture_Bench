@@ -32,7 +32,8 @@ import torch
 
 from isaaclab.envs import ManagerBasedRLEnv
 
-from .mdp.events import randomness
+from ...substep_graph import SubstepGraph
+from .mdp.events import PartKick, randomness
 from .mdp.state import tracker
 from .phases import OneLegPhases
 from .wrench import JointTorqueWrench
@@ -51,9 +52,12 @@ class AssemblyEnv(ManagerBasedRLEnv):
         #: wrench estimate as it was after the step's terminations (before any reset zeroed it)
         self.phases = None
         self._wrench_out = None
-        #: ResiP's reset kick on the parts (furniture.randomness kick_*), made by its
-        #: reset event (mdp.events.resip_reset); None until then
+        #: ResiP's reset kick on the parts (furniture.randomness kick_*; mdp.events.PartKick), armed by its reset
+        #: event (mdp.events.resip_reset) and applied every substep (zero while unarmed); built after the scene
         self.part_kick = None
+        #: furniture.cuda_graph: the substep as a CUDA graph (furniture_lab.substep_graph); None otherwise
+        self.substep_graph = None
+        self._substep_wrote = False
         # furniture.*_friction / gripper_* / ee_vel_point / part_masses are plain fields a config file can
         # override after the cfg's __post_init__ ran; push them into the event terms, the
         # actuator and the observation terms here, where the scene has not been built yet
@@ -78,15 +82,21 @@ class AssemblyEnv(ManagerBasedRLEnv):
         if "part_out_of_limits" in self.termination_manager.active_terms:
             self._episode_out_of_bounds = torch.zeros(self.num_envs, device=self.device)
         self.wrench = JointTorqueWrench(self, cfg.furniture)
+        self.part_kick = PartKick(self)
         apply_action = self.action_manager.apply_action
 
         def apply_action_then_estimate():
             apply_action()
-            if self.part_kick is not None:
-                self.part_kick.apply()  # before the scene writes the wrenches and the sim steps
+            self.part_kick.apply()  # the kick's wrench for this substep; written to PhysX below
             self.wrench.update()
 
-        self.action_manager.apply_action = apply_action_then_estimate
+        def apply_action_then_kick():
+            apply_action_then_estimate()
+            self.part_kick.write()  # a PhysX write only while a kick is on: outside the graphed region
+
+        self.action_manager.apply_action = apply_action_then_kick
+        if cfg.furniture.cuda_graph:
+            self._install_substep_graph(apply_action_then_estimate)
         if cfg.furniture.track_phases:
             self.phases = OneLegPhases(self, cfg.furniture)
         if self.phases is not None or cfg.furniture.log_wrench:
@@ -104,6 +114,49 @@ class AssemblyEnv(ManagerBasedRLEnv):
                 return dones
 
             self.termination_manager.compute = compute_then_track
+
+    def _install_substep_graph(self, apply_action) -> None:
+        """``furniture.cuda_graph``: Isaac Lab calls ``action_manager.apply_action()`` then ``scene.write_data_to_sim()``
+        before every physics substep; the pair becomes one :class:`SubstepGraph` region (the terms, the kick, the wrench
+        estimate, the actuator model, the PhysX writes). ``apply_action`` runs the graph for both; the scene's write right
+        after it is then done already, and a write anywhere else (``reset()``) is Isaac Lab's own, eager."""
+        if not str(self.device).startswith("cuda"):
+            raise ValueError(f"furniture.cuda_graph needs a CUDA device, the env runs on {self.device}")
+        scene = self.scene
+        scene_write = scene.write_data_to_sim
+        assets = {**scene.articulations, **scene.rigid_objects, **scene.rigid_object_collections}
+
+        def substep():
+            apply_action()
+            scene_write()
+
+        def signature() -> tuple:
+            # the Python-level branches the region takes: Isaac Lab writes an asset's external wrench only while
+            # has_external_wrench is set (the kick writes its own, outside the region), and the actuator model's
+            # targets only for implicit actuators
+            return tuple(
+                (name, bool(getattr(a, "has_external_wrench", False)), bool(getattr(a, "uses_external_wrench_positions", False)))
+                for name, a in assets.items()
+            ) + tuple((name, bool(a._has_implicit_actuators)) for name, a in scene.articulations.items())
+
+        from isaacsim.core.simulation_manager import SimulationManager
+
+        self.substep_graph = SubstepGraph(substep, assets, SimulationManager.get_physics_sim_view(), signature)
+        self._substep_wrote = False
+
+        def apply_then_write():
+            self.substep_graph.run()
+            self.part_kick.write()
+            self._substep_wrote = True
+
+        def write_data_to_sim():
+            if self._substep_wrote:
+                self._substep_wrote = False  # the substep wrote: Isaac Lab's call right after apply_action
+                return
+            scene_write()
+
+        self.action_manager.apply_action = apply_then_write
+        scene.write_data_to_sim = write_data_to_sim
 
     def _reset_idx(self, env_ids: Sequence[int]):
         if self._episode_success is not None and len(env_ids) > 0:

@@ -274,6 +274,10 @@ class FurnitureCfg:
     wrench_inertial: bool = False
     wrench_projection: str = "pinv"
     wrench_damping: float = 1.0e-4
+    #: run each physics substep's torch work (the action terms' IK and gripper command, the kick, the wrench
+    #: estimate, Isaac Lab's actuator model) as one CUDA graph, its PhysX reads and writes around it
+    #: (``furniture_lab/substep_graph.py``): the same math as one launch instead of a few hundred. CUDA only
+    cuda_graph: bool = False
 
 
 @configclass

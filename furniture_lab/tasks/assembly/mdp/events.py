@@ -358,7 +358,17 @@ def resip_reset(env: "ManagerBasedRLEnv", env_ids: torch.Tensor, level: Dict[str
 class PartKick:
     """The parts' reset kick (:func:`resip_reset`): a world-frame force and torque per part, held
     for the physics steps that make ``RESIP_KICK_DURATION`` and then removed. :meth:`arm` at a
-    reset; :meth:`apply` before every physics step (``AssemblyEnv`` calls it with the action)."""
+    reset; :meth:`apply` before every physics step (``AssemblyEnv`` calls it with the action).
+
+    Two halves, so the substep's torch work can run as a CUDA graph (``furniture_lab.substep_graph``)
+    and PhysX is written only while a kick is on: :meth:`apply` is branch-free device work filling
+    the kick's own wrench buffers (the kick where steps are left, zero elsewhere), and :meth:`write`
+    sends them to PhysX (the parts' views, world frame) for the ``steps`` substeps after an
+    :meth:`arm` plus one more that writes the zeros -- decided from a host-side countdown that
+    ``arm`` sets, never from the device. Isaac Lab's own path (``set_external_force_and_torque`` +
+    ``write_data_to_sim``) would decide the switch with ``forces.any()`` every substep, a
+    synchronization and a branch the graph could not hold, or write every substep, a PhysX call
+    per part (~0.2 ms each) that is the price of nothing most of the time."""
 
     def __init__(self, env: "ManagerBasedRLEnv") -> None:
         names = env.cfg.furniture.part_names
@@ -371,26 +381,36 @@ class PartKick:
         self.force = torch.zeros(n, P, 3, device=env.device)
         self.torque = torch.zeros(n, P, 3, device=env.device)
         self.left = torch.zeros(n, dtype=torch.long, device=env.device)
-        self.active = False
+        #: what :meth:`write` sends: this substep's force and torque per part, (P, N, 3) each (a part's slice
+        #: contiguous, as the tensor API wants it), world frame
+        self.force_now = torch.zeros(P, n, 3, device=env.device)
+        self.torque_now = torch.zeros(P, n, 3, device=env.device)
+        self.indices = torch.arange(n, dtype=torch.long, device=env.device)  # Isaac Lab's _ALL_INDICES
+        #: substeps whose PhysX write is still due: the kick's, then one writing the zeros
+        self.writes_due = 0
 
     def arm(self, env_ids: torch.Tensor, force: torch.Tensor, torque: torch.Tensor) -> None:
         self.force[env_ids] = force
         self.torque[env_ids] = torque
         self.left[env_ids] = self.steps
-        self.active = True
+        self.writes_due = self.steps + 1
 
     def apply(self) -> None:
-        if not self.active:
+        """This substep's wrench per part into the buffers: the kick where steps are left, zero elsewhere."""
+        on = (self.left > 0)[None, :, None]
+        self.force_now.copy_(torch.where(on, self.force.transpose(0, 1), 0.0))
+        self.torque_now.copy_(torch.where(on, self.torque.transpose(0, 1), 0.0))
+        self.left.sub_(1).clamp_(min=0)
+
+    def write(self) -> None:
+        """The buffers to PhysX, while a write is due (after :meth:`apply`, before the sim steps)."""
+        if self.writes_due <= 0:
             return
-        # every env written at once: an asset's wrench switch is all-or-nothing
-        on = (self.left > 0)[:, None, None]
-        force = torch.where(on, self.force, 0.0)
-        torque = torch.where(on, self.torque, 0.0)
+        self.writes_due -= 1
         for k, asset in enumerate(self.assets):
-            asset.set_external_force_and_torque(force[:, k : k + 1], torque[:, k : k + 1], is_global=True)
-        self.left = (self.left - 1).clamp(min=0)
-        # still on: keep going; just switched off: this call wrote the zeros, done
-        self.active = bool(on.any())
+            asset.root_physx_view.apply_forces_and_torques_at_position(
+                force_data=self.force_now[k], torque_data=self.torque_now[k], position_data=None, indices=self.indices, is_global=True
+            )
 
 
 def reset_assembly_tracker(env: "ManagerBasedRLEnv", env_ids: torch.Tensor) -> None:

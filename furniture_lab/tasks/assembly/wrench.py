@@ -31,6 +31,9 @@ On the Franka that is ``O_F_ext_hat_K`` from ``tau_ext_hat_filtered``. Here:
 The estimate is read with ``env.wrench.filtered`` (``(N, 6)``: force then torque) and
 ``env.wrench.raw``; the observation term ``mdp.ee_wrench`` exposes it to an observation
 group. ``scripts/wrench_probe.py`` checks it against PhysX's own joint reaction wrench.
+``raw``, ``filtered`` and ``tau_ext`` are fixed buffers written in place every substep: the
+substep runs inside a CUDA graph when ``furniture.cuda_graph`` is on (``substep_graph.py``),
+and a graph reads and writes addresses, not Python names.
 """
 
 from __future__ import annotations
@@ -172,14 +175,14 @@ class JointTorqueWrench:
 
     # ------------------------------------------------------------------ the step
     def update(self) -> None:
-        """One physics substep: estimate, add wrench noise, filter."""
-        self.tau_ext = self.external_torques()
+        """One physics substep: estimate, add wrench noise, filter; every result written into its buffer."""
+        self.tau_ext.copy_(self.external_torques())
         mass = self.mass_matrix() if self.cfg.wrench_projection == "dynamic" else None
         wrench = project_torques(self.jacobian_b(), self.tau_ext, mass, self.damping)
         if self.wrench_noisy:
             wrench = wrench + torch.randn_like(wrench) * self.wrench_std
-        self.raw = wrench
-        self.filtered = ema(self.filtered, wrench, self.alpha)
+        self.raw.copy_(wrench)
+        self.filtered.copy_(ema(self.filtered, wrench, self.alpha))
         self.updates += 1
 
     def reset(self, env_ids) -> None:
